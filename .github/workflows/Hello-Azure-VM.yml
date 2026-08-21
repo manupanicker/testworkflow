@@ -25,6 +25,6 @@ jobs:
           inlineScript: |
             az vm run-command invoke \
               --resource-group CITRIX_BUILD \
-              --name ALPHAQDDC007VM \
+              --name ALFAQMGTDC01 \
               --command-id RunPowerShellScript \
               --scripts "Write-Output 'Hello World from GitHub'; Write-Output ('ComputerName: ' + $env:COMPUTERNAME); Write-Output ('Time: ' + (Get-Date).ToString('o'))"
