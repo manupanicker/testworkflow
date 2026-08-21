@@ -1,0 +1,30 @@
+name: Hello World Azure VM
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  hello-world:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run Hello World on Azure VM
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az vm run-command invoke \
+              --resource-group CITRIX_BUILD \
+              --name ALPHAQDDC007VM \
+              --command-id RunPowerShellScript \
+              --scripts "Write-Output 'Hello World from GitHub'; Write-Output ('ComputerName: ' + $env:COMPUTERNAME); Write-Output ('Time: ' + (Get-Date).ToString('o'))"
