@@ -117,13 +117,16 @@ Write-Output "Creating network interface..."
 
 $nicName = "$VMName-nic"
 
+# New-AzNetworkInterface can prompt for confirmation in some Az.Network versions.
+# The GitHub runner is non-interactive, so explicitly disable confirmation.
 $nic = New-AzNetworkInterface `
     -Name $nicName `
     -ResourceGroupName $ResourceGroupName `
     -Location $Location `
     -SubnetId $subnet.Id `
-    -DnsServer $DnsServer `
-    -EnableAcceleratedNetworking:$EnableAcceleratedNetworking
+    -DnsServer @($DnsServer) `
+    -EnableAcceleratedNetworking:$EnableAcceleratedNetworking `
+    -Confirm:$false
 
 Write-Output "NIC created: $nicName"
 Write-Output "NIC DNS server configured: $DnsServer"
@@ -156,7 +159,8 @@ New-AzVM `
     -ResourceGroupName $ResourceGroupName `
     -Location $Location `
     -VM $vmConfig `
-    -Verbose
+    -Verbose `
+    -Confirm:$false
 
 Write-Output ""
 Write-Output "=============================================="
