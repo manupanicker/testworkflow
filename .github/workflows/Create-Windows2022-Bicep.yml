@@ -1,0 +1,67 @@
+name: Create Windows 2022 VM - Bicep
+
+on:
+  workflow_dispatch:
+    inputs:
+      vm_name:
+        description: 'Azure VM name'
+        required: true
+        type: string
+        default: win2022-bicep-test
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_VM_ADMIN_PASSWORD: ${{ secrets.AZURE_VM_ADMIN_PASSWORD }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify Bicep files
+        run: |
+          test -f Bicep/main.bicep
+          test -f Bicep/main.bicepparam
+          az bicep version
+
+      - name: Validate Bicep deployment
+        env:
+          BICEP_ADMIN_PASSWORD: ${{ secrets.AZURE_VM_ADMIN_PASSWORD }}
+        run: |
+          az deployment group validate \
+            --resource-group CITRIX_BUILD \
+            --template-file Bicep/main.bicep \
+            --parameters vmName='${{ inputs.vm_name }}' \
+                         adminPassword="$BICEP_ADMIN_PASSWORD"
+
+      - name: Deploy Bicep
+        env:
+          BICEP_ADMIN_PASSWORD: ${{ secrets.AZURE_VM_ADMIN_PASSWORD }}
+        run: |
+          az deployment group create \
+            --resource-group CITRIX_BUILD \
+            --name "vm-${{ inputs.vm_name }}" \
+            --template-file Bicep/main.bicep \
+            --parameters vmName='${{ inputs.vm_name }}' \
+                         adminPassword="$BICEP_ADMIN_PASSWORD"
+
+      - name: Show deployment outputs
+        run: |
+          az deployment group show \
+            --resource-group CITRIX_BUILD \
+            --name "vm-${{ inputs.vm_name }}" \
+            --query properties.outputs \
+            --output json
