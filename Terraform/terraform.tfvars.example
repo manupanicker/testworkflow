@@ -1,0 +1,2 @@
+vm_name        = "win2022-tf-test"
+admin_password = "REPLACE_WITH_SECRET"
