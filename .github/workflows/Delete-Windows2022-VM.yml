@@ -1,0 +1,101 @@
+name: Delete Windows 2022 VM
+
+on:
+  workflow_dispatch:
+    inputs:
+      vmName:
+        description: 'Azure VM name to remove'
+        required: true
+        type: string
+      confirmDelete:
+        description: 'Type DELETE to confirm VM deletion'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: CITRIX_BUILD
+  DOMAIN_NAME: alphaq.com
+
+jobs:
+  delete-vm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate deletion confirmation
+        shell: pwsh
+        run: |
+          if ('${{ inputs.confirmDelete }}' -ne 'DELETE') {
+            throw 'Deletion cancelled. You must type DELETE exactly.'
+          }
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: Verify VM exists
+        shell: pwsh
+        run: |
+          $vm = Get-AzVM -ResourceGroupName $env:RESOURCE_GROUP -Name '${{ inputs.vmName }}' -ErrorAction Stop
+          Write-Output "Found VM: $($vm.Name)"
+
+      - name: Remove VM from domain
+        uses: azure/powershell@v2
+        env:
+          ALPHAQ_DOMAIN_JOIN_USERNAME: ${{ secrets.ALPHAQ_DOMAIN_JOIN_USERNAME }}
+          ALPHAQ_DOMAIN_JOIN_PASSWORD: ${{ secrets.ALPHAQ_DOMAIN_JOIN_PASSWORD }}
+        with:
+          azPSVersion: latest
+          inlineScript: |
+            if ([string]::IsNullOrWhiteSpace($env:ALPHAQ_DOMAIN_JOIN_USERNAME) -or [string]::IsNullOrWhiteSpace($env:ALPHAQ_DOMAIN_JOIN_PASSWORD)) {
+              throw 'Domain credentials are not configured.'
+            }
+
+            $parameters = @{
+              DomainName     = $env:DOMAIN_NAME
+              DomainUsername = $env:ALPHAQ_DOMAIN_JOIN_USERNAME
+              DomainPassword = $env:ALPHAQ_DOMAIN_JOIN_PASSWORD
+            }
+
+            Invoke-AzVMRunCommand `
+              -ResourceGroupName $env:RESOURCE_GROUP `
+              -VMName '${{ inputs.vmName }}' `
+              -CommandId 'RunPowerShellScript' `
+              -ScriptPath './Scripts/Remove-From-Domain.ps1' `
+              -Parameter $parameters
+
+      - name: Wait for domain removal and VM shutdown
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 30
+
+      - name: Delete Azure VM and attached resources
+        shell: pwsh
+        run: |
+          $vmName = '${{ inputs.vmName }}'
+          $rg = $env:RESOURCE_GROUP
+          $vm = Get-AzVM -ResourceGroupName $rg -Name $vmName -ErrorAction Stop
+          $nicIds = @($vm.NetworkProfile.NetworkInterfaces.Id)
+          $osDiskId = $vm.StorageProfile.OsDisk.ManagedDisk.Id
+
+          Remove-AzVM -ResourceGroupName $rg -Name $vmName -Force
+
+          foreach ($nicId in $nicIds) {
+            $nic = Get-AzResource -ResourceId $nicId -ErrorAction SilentlyContinue
+            if ($nic) { Remove-AzResource -ResourceId $nicId -Force }
+          }
+
+          if ($osDiskId) {
+            Remove-AzResource -ResourceId $osDiskId -Force -ErrorAction SilentlyContinue
+          }
+
+          Write-Output "Deleted VM, NIC(s), and OS disk for $vmName."
