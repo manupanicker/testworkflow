@@ -26,20 +26,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout terraform-vm branch
+      - name: Checkout selected branch
         uses: actions/checkout@v4
         with:
-          ref: terraform-vm
+          ref: ${{ github.ref_name }}
           fetch-depth: 1
 
       - name: Verify Terraform files
+        shell: bash
         run: |
+          set -e
           echo "Git ref: $(git branch --show-current)"
-          echo "Workspace: ${{ github.workspace }}"
+          echo "GitHub ref: $GITHUB_REF"
+          echo "Workspace: $GITHUB_WORKSPACE"
           pwd
           ls -la
-          test -d Terraform
-          ls -la Terraform
+          if [ ! -d "$GITHUB_WORKSPACE/Terraform" ]; then
+            echo "ERROR: Terraform directory was not checked out."
+            exit 1
+          fi
+          echo "Terraform directory contents:"
+          ls -la "$GITHUB_WORKSPACE/Terraform"
 
       - name: Azure login
         uses: azure/login@v2
@@ -52,21 +59,21 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
-        working-directory: Terraform
+        working-directory: ${{ github.workspace }}/Terraform
         run: terraform init
 
       - name: Terraform Validate
-        working-directory: Terraform
+        working-directory: ${{ github.workspace }}/Terraform
         run: terraform validate
 
       - name: Terraform Plan
-        working-directory: Terraform
+        working-directory: ${{ github.workspace }}/Terraform
         run: terraform plan -out=tfplan
 
       - name: Terraform Apply
-        working-directory: Terraform
+        working-directory: ${{ github.workspace }}/Terraform
         run: terraform apply -auto-approve tfplan
 
       - name: Terraform Output
-        working-directory: Terraform
+        working-directory: ${{ github.workspace }}/Terraform
         run: terraform output
