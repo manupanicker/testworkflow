@@ -71,13 +71,13 @@ jobs:
             -ImageSku "$env:IMAGE_SKU" `
             -ImageVersion "$env:IMAGE_VERSION" `
             -OSDiskType "$env:OS_DISK_TYPE" `
-            -EnableAcceleratedNetworking $env:ENABLE_ACCELERATED_NETWORKING `
-            -EnableBootDiagnostics $env:ENABLE_BOOT_DIAGNOSTICS `
-            -EnableAutoUpdates $env:ENABLE_AUTO_UPDATES `
+            -EnableAcceleratedNetworking ([bool]::Parse($env:ENABLE_ACCELERATED_NETWORKING)) `
+            -EnableBootDiagnostics ([bool]::Parse($env:ENABLE_BOOT_DIAGNOSTICS)) `
+            -EnableAutoUpdates ([bool]::Parse($env:ENABLE_AUTO_UPDATES)) `
             -PatchMode "$env:PATCH_MODE" `
             -SecurityType "$env:SECURITY_TYPE" `
-            -SecureBoot $env:SECURE_BOOT `
-            -VTPM $env:VTPM
+            -SecureBoot ([bool]::Parse($env:SECURE_BOOT)) `
+            -VTPM ([bool]::Parse($env:VTPM))
 
       - name: Verify VM
         shell: bash
