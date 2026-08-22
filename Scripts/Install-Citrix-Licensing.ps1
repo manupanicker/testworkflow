@@ -1,25 +1,21 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$MediaUri,
-
-    [Parameter(Mandatory = $false)]
-    [string]$MediaSasToken
+    [string]$CitrixMediaPath
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $WorkRoot = 'C:\Temp\CitrixLicensing'
-$DownloadPath = Join-Path $WorkRoot 'CitrixMedia.zip'
-$ExtractRoot = Join-Path $WorkRoot 'CVAD'
-$Installer = Join-Path $ExtractRoot 'x64\Licensing\CitrixLicensing.exe'
+$MediaRoot = Join-Path $WorkRoot 'CVAD'
+$Installer = Join-Path $MediaRoot 'x64\Licensing\CitrixLicensing.exe'
 $LogFile = 'C:\Temp\CitrixLicenseInstall.log'
 
 Write-Output '============================================================'
 Write-Output 'Citrix License Server Installation'
 Write-Output '============================================================'
-Write-Output "Media URI : $MediaUri"
+Write-Output "Media path : $CitrixMediaPath"
 
 New-Item -Path $WorkRoot -ItemType Directory -Force | Out-Null
 
@@ -34,40 +30,27 @@ if ($ExistingServices) {
     Write-Output 'Citrix Licensing is already installed. Skipping installation.'
 }
 else {
-    if ([string]::IsNullOrWhiteSpace($MediaUri)) {
-        throw 'MediaUri is required when Citrix Licensing is not already installed.'
+    if ([string]::IsNullOrWhiteSpace($CitrixMediaPath)) {
+        throw 'CitrixMediaPath is required when Citrix Licensing is not already installed.'
     }
 
-    $Uri = $MediaUri
-    if (-not [string]::IsNullOrWhiteSpace($MediaSasToken)) {
-        $separator = if ($Uri.Contains('?')) { '&' } else { '?' }
-        $Uri = "$Uri$separator$MediaSasToken"
+    if (-not (Test-Path -LiteralPath $CitrixMediaPath)) {
+        throw "Citrix media path is not accessible from the target VM: $CitrixMediaPath"
     }
 
-    Write-Output 'Downloading Citrix media...'
-    Invoke-WebRequest -Uri $Uri -OutFile $DownloadPath -UseBasicParsing
+    Write-Output 'Copying Citrix media from UNC share...'
+    Copy-Item -Path (Join-Path $CitrixMediaPath '*') -Destination $MediaRoot -Recurse -Force
 
-    if (-not (Test-Path $DownloadPath)) {
-        throw "Citrix media download failed: $DownloadPath"
-    }
-
-    Write-Output 'Extracting Citrix media...'
-    if (Test-Path $ExtractRoot) {
-        Remove-Item $ExtractRoot -Recurse -Force
-    }
-
-    Expand-Archive -Path $DownloadPath -DestinationPath $ExtractRoot -Force
-
-    # Support a zip that contains an additional top-level directory.
-    if (-not (Test-Path $Installer)) {
-        $FoundInstaller = Get-ChildItem -Path $ExtractRoot -Filter 'CitrixLicensing.exe' -File -Recurse | Select-Object -First 1
+    # Support media layouts with an additional top-level directory.
+    if (-not (Test-Path -LiteralPath $Installer)) {
+        $FoundInstaller = Get-ChildItem -Path $MediaRoot -Filter 'CitrixLicensing.exe' -File -Recurse | Select-Object -First 1
         if ($FoundInstaller) {
             $Installer = $FoundInstaller.FullName
         }
     }
 
-    if (-not (Test-Path $Installer)) {
-        throw "CitrixLicensing.exe was not found under $ExtractRoot"
+    if (-not (Test-Path -LiteralPath $Installer)) {
+        throw "CitrixLicensing.exe was not found under $MediaRoot"
     }
 
     Write-Output "Installer: $Installer"
@@ -132,6 +115,6 @@ if ($Stopped) {
 
 Write-Output 'Citrix Licensing installation and validation completed successfully.'
 
-# Cleanup only the downloaded/extracted installation media.
+# Cleanup only the copied installation media. Keep the installer log for troubleshooting.
 Remove-Item -Path $WorkRoot -Recurse -Force -ErrorAction SilentlyContinue
-Write-Output 'Installation media cleaned up.'
+Write-Output 'Copied installation media cleaned up.'
