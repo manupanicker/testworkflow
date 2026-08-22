@@ -28,6 +28,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+
+      - name: Verify Terraform files
+        run: |
+          echo "Branch/ref: ${{ github.ref }}"
+          echo "Workspace: ${{ github.workspace }}"
+          pwd
+          ls -la
+          test -d Terraform
+          ls -la Terraform
 
       - name: Azure login
         uses: azure/login@v2
@@ -40,21 +52,21 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
-        working-directory: Terraform
+        working-directory: ${{ github.workspace }}/Terraform
         run: terraform init
 
       - name: Terraform Validate
-        working-directory: Terraform
+        working-directory: ${{ github.workspace }}/Terraform
         run: terraform validate
 
       - name: Terraform Plan
-        working-directory: Terraform
+        working-directory: ${{ github.workspace }}/Terraform
         run: terraform plan -out=tfplan
 
       - name: Terraform Apply
-        working-directory: Terraform
+        working-directory: ${{ github.workspace }}/Terraform
         run: terraform apply -auto-approve tfplan
 
       - name: Terraform Output
-        working-directory: Terraform
+        working-directory: ${{ github.workspace }}/Terraform
         run: terraform output
