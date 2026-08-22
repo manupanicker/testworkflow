@@ -1,0 +1,75 @@
+name: Install Citrix Licensing
+
+on:
+  workflow_dispatch:
+    inputs:
+      vmName:
+        description: 'Existing Azure VM name'
+        required: true
+        type: string
+      mediaUri:
+        description: 'HTTPS URI to a ZIP containing Citrix CVAD media'
+        required: true
+        type: string
+      mediaSasToken:
+        description: 'Optional SAS token for the media URI (do not include the leading ?)'
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: CITRIX_BUILD
+
+jobs:
+  install-licensing:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: Verify target VM
+        shell: pwsh
+        env:
+          VM_NAME: ${{ inputs.vmName }}
+        run: |
+          $vm = Get-AzVM -ResourceGroupName $env:RESOURCE_GROUP -Name $env:VM_NAME -ErrorAction Stop
+          Write-Output "Target VM: $($vm.Name)"
+          Write-Output "Power state: $((Get-AzVM -ResourceGroupName $env:RESOURCE_GROUP -Name $env:VM_NAME -Status).Statuses | Where-Object Code -like 'PowerState/*' | Select-Object -ExpandProperty DisplayStatus)"
+
+      - name: Install Citrix Licensing with Azure VM Run Command
+        uses: azure/powershell@v2
+        env:
+          VM_NAME: ${{ inputs.vmName }}
+          MEDIA_URI: ${{ inputs.mediaUri }}
+          MEDIA_SAS_TOKEN: ${{ inputs.mediaSasToken }}
+        with:
+          azPSVersion: latest
+          inlineScript: |
+            $parameters = @{
+              MediaUri     = $env:MEDIA_URI
+              MediaSasToken = $env:MEDIA_SAS_TOKEN
+            }
+
+            Invoke-AzVMRunCommand `
+              -ResourceGroupName $env:RESOURCE_GROUP `
+              -VMName $env:VM_NAME `
+              -CommandId 'RunPowerShellScript' `
+              -ScriptPath './Scripts/Install-Citrix-Licensing.ps1' `
+              -Parameter $parameters
+
+      - name: Installation complete
+        shell: pwsh
+        run: |
+          Write-Output "Citrix Licensing installation workflow completed for ${{ inputs.vmName }}."
