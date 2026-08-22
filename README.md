@@ -1,36 +1,93 @@
-# Test Workflow
+# Citrix Infrastructure Automation
 
-GitHub Actions automation for provisioning, configuring, validating, and removing Azure Windows VMs.
+GitHub Actions automation for building, configuring, validating, and removing Azure-based Citrix infrastructure.
 
 ## Architecture
 
-GitHub Actions is the orchestration layer. YAML workflows control when and where automation runs, while **Bicep handles Azure infrastructure** and **PowerShell handles Windows/guest configuration**.
+The repository is designed as a **Citrix infrastructure build platform**, not just a Windows VM provisioning workflow.
+
+GitHub Actions provides orchestration and operator-controlled inputs. **Bicep is the standard for Azure infrastructure**, while **PowerShell handles Windows and Citrix guest configuration**. Azure APIs and VM Run Command are used wherever possible so the solution does not depend on WinRM connectivity from the runner.
 
 ```text
-GitHub Actions
-      |
-      +-- YAML workflows (orchestration / inputs)
-      |
-      +-- Bicep (Azure infrastructure)
-      |
-      +-- PowerShell (Windows / guest configuration)
-      |
-      v
-    Azure
-      |
-      v
- Azure Windows VM
+                         GitHub Actions
+                              |
+                    YAML orchestration / inputs
+                              |
+                +-------------+-------------+
+                |                           |
+              Bicep                    PowerShell
+                |                           |
+        Azure infrastructure        Windows / Citrix config
+                |                           |
+                +-------------+-------------+
+                              |
+                         Azure Platform
+                              |
+          +-------------------+-------------------+
+          |                   |                   |
+        Network             VMs              Storage
+          |                   |                   |
+          |              Windows Server        OS/Data
+          |                   |                   |
+          |              Domain Join             |
+          |                   |                   |
+          |              Citrix VDA              |
+          |                   |                   |
+          +-------------------+-------------------+
+                              |
+                       Citrix Infrastructure
 ```
 
-The workflows use Azure APIs and Azure VM Run Command to execute PowerShell inside Azure VMs. This does not require WinRM or RDP connectivity from the GitHub-hosted runner to the VM.
+### Bicep - Azure infrastructure
 
-## Workflows
+Bicep is used for new Azure infrastructure work, including:
+
+- Virtual machines
+- NICs and IP configuration
+- VNet/subnet integration
+- DNS configuration
+- Managed disks
+- Trusted Launch
+- Secure Boot
+- vTPM
+- Accelerated Networking
+- Boot diagnostics
+- Other Azure resources required by the Citrix platform
+
+### PowerShell - Windows and Citrix configuration
+
+PowerShell is used for operations inside Windows, including:
+
+- Domain join and domain removal
+- Windows configuration
+- Network discovery configuration
+- Windows services
+- Software installation
+- Citrix VDA installation and configuration
+- Citrix-specific registry/configuration changes
+- Citrix health checks
+- Post-build validation
+- MCS image preparation
+
+### GitHub Actions - orchestration
+
+YAML workflows remain intentionally thin. They provide:
+
+- Manual workflow inputs
+- Secrets and identity configuration
+- Workflow sequencing
+- Calling Bicep deployments
+- Calling PowerShell scripts
+- Validation and failure handling
+- Operator-controlled destructive actions
+
+## Current Workflows
 
 ### 1. Create Windows Server 2022 VM - Bicep
 
 `Create-Windows2022-Bicep.yml`
 
-Creates a Windows Server 2022 Azure VM using the Azure-native Bicep deployment.
+Creates the Azure Windows Server 2022 VM that forms the base for subsequent Citrix configuration.
 
 Current configuration includes:
 
@@ -49,7 +106,7 @@ Current configuration includes:
 - Secure Boot enabled
 - vTPM enabled
 
-The VM name is supplied when the workflow is run, allowing the same workflow to create multiple VMs.
+The VM name is supplied when the workflow is run, allowing the same infrastructure workflow to build multiple machines.
 
 ### 2. Join VM to alphaq.com
 
@@ -57,17 +114,17 @@ The VM name is supplied when the workflow is run, allowing the same workflow to 
 
 Runs `Scripts/Domain-Join.ps1` inside the target VM through Azure VM Run Command.
 
-The script is responsible for:
+The script handles:
 
-- Validating DNS
-- Validating `alphaq.com` discovery
-- Checking current domain membership
-- Joining the VM to `alphaq.com`
-- Applying the required Windows network configuration
-- Configuring the required Windows network-discovery behavior
-- Restarting the VM after the domain join
+- DNS validation
+- `alphaq.com` discovery validation
+- Existing domain-membership checks
+- Domain join
+- Required Windows network configuration
+- Network-discovery configuration
+- Restart after domain join
 
-The domain-join credentials are stored as GitHub repository secrets and are not committed to the repository.
+Domain credentials are stored as GitHub repository secrets and are not committed to the repository.
 
 ### 3. Delete Windows Server 2022 VM
 
@@ -75,19 +132,53 @@ The domain-join credentials are stored as GitHub repository secrets and are not 
 
 Removes a VM and its associated Azure resources after first removing the machine from `alphaq.com`.
 
-The workflow requires the operator to enter `DELETE` as an explicit confirmation before proceeding.
+The workflow requires the operator to enter `DELETE` as an explicit confirmation.
 
 The deletion process is:
 
-1. Validate the VM exists.
-2. Run `Scripts/Remove-From-Domain.ps1` inside the VM through Azure VM Run Command.
+1. Validate that the VM exists.
+2. Run `Scripts/Remove-From-Domain.ps1` inside the VM.
 3. Remove the VM from `alphaq.com`.
 4. Wait for the VM restart/shutdown.
 5. Delete the Azure VM.
 6. Delete the associated NIC(s).
 7. Delete the OS disk.
 
-If domain removal fails, the workflow must not proceed with destructive cleanup.
+If domain removal fails, destructive Azure cleanup should not proceed.
+
+## Target Citrix Build Lifecycle
+
+The repository will evolve toward a repeatable Citrix infrastructure factory:
+
+```text
+1. Provision Azure infrastructure
+          |
+          v
+2. Build Windows Server VM
+          |
+          v
+3. Configure DNS / network
+          |
+          v
+4. Join alphaq.com
+          |
+          v
+5. Install and configure Citrix VDA
+          |
+          v
+6. Run Citrix / Windows health checks
+          |
+          v
+7. Validate machine readiness
+          |
+          v
+8. Prepare for MCS / image lifecycle
+          |
+          v
+9. Retire / remove machine
+```
+
+The goal is to make each stage independently executable and repeatable while keeping infrastructure provisioning separate from guest configuration.
 
 ## Repository Structure
 
@@ -109,6 +200,8 @@ Scripts/
 
 README.md
 ```
+
+Additional Citrix-specific Bicep modules and PowerShell scripts should be added as the infrastructure factory expands.
 
 ## Required GitHub Secrets
 
@@ -136,22 +229,12 @@ For VM deletion, provide the VM name and type `DELETE` as the confirmation.
 
 ## Design Principles
 
-- **YAML controls the workflow.**
+- **GitHub Actions orchestrates.**
 - **Bicep provisions Azure infrastructure.**
-- **PowerShell performs Windows/guest operations.**
-- Keep credentials in GitHub Secrets, never in YAML or PowerShell source.
-- Use Azure APIs and VM Run Command rather than requiring WinRM access to Azure VMs.
-- Keep provisioning, domain configuration, and destructive cleanup as separate workflows so each stage can be tested independently.
+- **PowerShell configures Windows and Citrix.**
+- Keep credentials in GitHub Secrets, never in source code.
+- Prefer Azure APIs and VM Run Command instead of requiring WinRM access to VMs.
+- Keep infrastructure provisioning separate from guest configuration.
+- Keep domain join, Citrix configuration, health checks, and image preparation independently executable.
 - Use Azure-native Bicep for new Azure infrastructure work rather than Terraform for this project.
-
-## Future Automation
-
-This repository can be extended with additional PowerShell-based workflows for:
-
-- VM health checks
-- Software installation
-- Windows configuration
-- Citrix VDA configuration
-- Service validation
-- Post-build validation
-- MCS image preparation
+- Build reusable components so the same workflows can create and configure multiple Citrix machines consistently.
