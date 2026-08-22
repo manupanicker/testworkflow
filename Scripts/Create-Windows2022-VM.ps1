@@ -32,6 +32,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OSDiskType,
 
+    [string]$DnsServer = "172.16.0.4",
     [bool]$EnableAcceleratedNetworking = $true,
     [bool]$EnableBootDiagnostics = $true,
     [bool]$EnableAutoUpdates = $true,
@@ -52,6 +53,7 @@ Write-Output "Location      : $Location"
 Write-Output "VM Size       : $VMSize"
 Write-Output "VNet          : $VNetName"
 Write-Output "Subnet        : $SubnetName"
+Write-Output "DNS Server    : $DnsServer"
 Write-Output "Image         : $ImagePublisher/$ImageOffer/$ImageSku"
 Write-Output "Security      : $SecurityType"
 Write-Output "Secure Boot   : $SecureBoot"
@@ -110,7 +112,7 @@ $vmConfig = Set-AzVMSourceImage `
     -Skus $ImageSku `
     -Version $ImageVersion
 
-# Create NIC with dynamic private IP (DHCP) and no public IP.
+# Create NIC with dynamic private IP (DHCP), no public IP, and the required DNS server.
 Write-Output "Creating network interface..."
 
 $nicName = "$VMName-nic"
@@ -120,9 +122,11 @@ $nic = New-AzNetworkInterface `
     -ResourceGroupName $ResourceGroupName `
     -Location $Location `
     -SubnetId $subnet.Id `
+    -DnsServer $DnsServer `
     -EnableAcceleratedNetworking:$EnableAcceleratedNetworking
 
 Write-Output "NIC created: $nicName"
+Write-Output "NIC DNS server configured: $DnsServer"
 
 $vmConfig = Add-AzVMNetworkInterface -VM $vmConfig -Id $nic.Id
 
