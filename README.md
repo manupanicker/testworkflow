@@ -1,17 +1,19 @@
 # Test Workflow
 
-GitHub Actions proof-of-concept for provisioning and configuring Azure Windows VMs using Azure authentication and PowerShell.
+GitHub Actions automation for provisioning, configuring, validating, and removing Azure Windows VMs.
 
 ## Architecture
 
-GitHub Actions is the orchestration layer. YAML workflows control when and where automation runs, while PowerShell scripts contain the Windows/Azure implementation logic.
+GitHub Actions is the orchestration layer. YAML workflows control when and where automation runs, while **Bicep handles Azure infrastructure** and **PowerShell handles Windows/guest configuration**.
 
 ```text
 GitHub Actions
       |
-      +-- YAML workflow (orchestration)
+      +-- YAML workflows (orchestration / inputs)
       |
-      +-- PowerShell scripts (implementation)
+      +-- Bicep (Azure infrastructure)
+      |
+      +-- PowerShell (Windows / guest configuration)
       |
       v
     Azure
@@ -20,15 +22,15 @@ GitHub Actions
  Azure Windows VM
 ```
 
-The workflows use Azure VM Run Command to execute PowerShell inside Azure VMs. This does not require WinRM or RDP connectivity from the GitHub-hosted runner to the VM.
+The workflows use Azure APIs and Azure VM Run Command to execute PowerShell inside Azure VMs. This does not require WinRM or RDP connectivity from the GitHub-hosted runner to the VM.
 
 ## Workflows
 
-### 1. Create Windows Server 2022 VM
+### 1. Create Windows Server 2022 VM - Bicep
 
-`Create-Windows2022-VM.yml`
+`Create-Windows2022-Bicep.yml`
 
-Creates a Windows Server 2022 Azure VM using the configuration defined by the workflow and `Scripts/Create-Windows2022-VM.ps1`.
+Creates a Windows Server 2022 Azure VM using the Azure-native Bicep deployment.
 
 Current configuration includes:
 
@@ -62,21 +64,48 @@ The script is responsible for:
 - Checking current domain membership
 - Joining the VM to `alphaq.com`
 - Applying the required Windows network configuration
+- Configuring the required Windows network-discovery behavior
 - Restarting the VM after the domain join
 
 The domain-join credentials are stored as GitHub repository secrets and are not committed to the repository.
+
+### 3. Delete Windows Server 2022 VM
+
+`Delete-Windows2022-VM.yml`
+
+Removes a VM and its associated Azure resources after first removing the machine from `alphaq.com`.
+
+The workflow requires the operator to enter `DELETE` as an explicit confirmation before proceeding.
+
+The deletion process is:
+
+1. Validate the VM exists.
+2. Run `Scripts/Remove-From-Domain.ps1` inside the VM through Azure VM Run Command.
+3. Remove the VM from `alphaq.com`.
+4. Wait for the VM restart/shutdown.
+5. Delete the Azure VM.
+6. Delete the associated NIC(s).
+7. Delete the OS disk.
+
+If domain removal fails, the workflow must not proceed with destructive cleanup.
 
 ## Repository Structure
 
 ```text
 .github/
 └── workflows/
-    ├── Create-Windows2022-VM.yml
-    └── Domain-Join.yml
+    ├── Create-Windows2022-Bicep.yml
+    ├── Domain-Join.yml
+    └── Delete-Windows2022-VM.yml
+
+Bicep/
+├── main.bicep
+└── main.bicepparam
 
 Scripts/
 ├── Create-Windows2022-VM.ps1
-└── Domain-Join.ps1
+├── Domain-Join.ps1
+└── Remove-From-Domain.ps1
 
 README.md
 ```
@@ -103,13 +132,17 @@ For VM creation, provide a unique VM name.
 
 For domain joining, provide the name of an existing Azure VM.
 
+For VM deletion, provide the VM name and type `DELETE` as the confirmation.
+
 ## Design Principles
 
 - **YAML controls the workflow.**
-- **PowerShell performs the Windows/Azure operations.**
+- **Bicep provisions Azure infrastructure.**
+- **PowerShell performs Windows/guest operations.**
 - Keep credentials in GitHub Secrets, never in YAML or PowerShell source.
 - Use Azure APIs and VM Run Command rather than requiring WinRM access to Azure VMs.
-- Keep provisioning and post-provisioning configuration as separate workflows so each stage can be tested independently.
+- Keep provisioning, domain configuration, and destructive cleanup as separate workflows so each stage can be tested independently.
+- Use Azure-native Bicep for new Azure infrastructure work rather than Terraform for this project.
 
 ## Future Automation
 
