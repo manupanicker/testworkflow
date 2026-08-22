@@ -22,11 +22,17 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Verify script exists
+        shell: bash
+        run: |
+          ls -la Scripts
+          test -f ./Scripts/HelloWorld.ps1
+
       - name: Run HelloWorld.ps1 on Azure VM
         uses: azure/cli@v2
         with:
           inlineScript: |
-            $script = Get-Content ./HelloWorld.ps1 -Raw
+            $script = Get-Content ./Scripts/HelloWorld.ps1 -Raw
 
             az vm run-command invoke `
               --resource-group CITRIX_BUILD `
