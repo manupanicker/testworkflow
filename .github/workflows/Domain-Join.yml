@@ -1,0 +1,92 @@
+name: Join VM to alphaq.com
+
+on:
+  workflow_dispatch:
+    inputs:
+      vmName:
+        description: 'Azure VM name to domain join'
+        required: true
+        type: string
+        default: 'win2022-test'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: Citrix_Build
+  DOMAIN_NAME: alphaq.com
+  DNS_SERVER: 172.16.0.4
+
+jobs:
+  domain-join:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: Verify VM exists
+        shell: pwsh
+        run: |
+          $vm = Get-AzVM -ResourceGroupName "$env:RESOURCE_GROUP" -Name "${{ inputs.vmName }}" -ErrorAction Stop
+          Write-Output "Found VM: $($vm.Name)"
+
+      - name: Join VM to domain
+        uses: azure/powershell@v2
+        with:
+          azPSVersion: latest
+          inlineScript: |
+            $vmName = "${{ inputs.vmName }}"
+
+            $domainUsername = $env:ALPHAQ_DOMAIN_JOIN_USERNAME
+            $domainPassword = $env:ALPHAQ_DOMAIN_JOIN_PASSWORD
+
+            if ([string]::IsNullOrWhiteSpace($domainUsername) -or [string]::IsNullOrWhiteSpace($domainPassword)) {
+              throw "Domain join credentials are not configured."
+            }
+
+            $script = @'
+            $ErrorActionPreference = 'Stop'
+
+            Write-Output "Computer: $env:COMPUTERNAME"
+            Write-Output "Testing domain DNS resolution..."
+            Resolve-DnsName alphaq.com -ErrorAction Stop | Out-Null
+            Resolve-DnsName _ldap._tcp.dc._msdcs.alphaq.com -Type SRV -ErrorAction Stop | Out-Null
+            Write-Output "Domain DNS resolution successful."
+
+            $securePassword = ConvertTo-SecureString $env:DOMAIN_JOIN_PASSWORD -AsPlainText -Force
+            $credential = New-Object System.Management.Automation.PSCredential($env:DOMAIN_JOIN_USERNAME, $securePassword)
+
+            if ((Get-CimInstance Win32_ComputerSystem).PartOfDomain) {
+                Write-Output "Computer is already domain joined: $((Get-CimInstance Win32_ComputerSystem).Domain)"
+                exit 0
+            }
+
+            Write-Output "Joining $env:COMPUTERNAME to alphaq.com..."
+            Add-Computer -DomainName 'alphaq.com' -Credential $credential -Force -Restart
+            '@
+
+            # Inject credentials into the guest command without putting them in the script itself.
+            $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+
+            $command = @"
+            `$env:DOMAIN_JOIN_USERNAME = '$domainUsername'
+            `$env:DOMAIN_JOIN_PASSWORD = '$domainPassword'
+            `$decoded = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('$encodedScript'))
+            Invoke-Expression `$decoded
+            "@
+
+            Invoke-AzVMRunCommand `
+              -ResourceGroupName $env:RESOURCE_GROUP `
+              -VMName $vmName `
+              -CommandId 'RunPowerShellScript' `
+              -ScriptString $command
+        env:
+          ALPHAQ_DOMAIN_JOIN_USERNAME: ${{ secrets.ALPHAQ_DOMAIN_JOIN_USERNAME }}
+          ALPHAQ_DOMAIN_JOIN_PASSWORD: ${{ secrets.ALPHAQ_DOMAIN_JOIN_PASSWORD }}
