@@ -15,6 +15,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify script exists
+        shell: bash
+        run: |
+          echo "Repository contents:"
+          ls -la
+          echo ""
+          echo "Scripts directory:"
+          ls -la ./Scripts
+          echo ""
+          echo "Checking HelloWorld.ps1..."
+          test -f ./Scripts/HelloWorld.ps1
+          echo "HelloWorld.ps1 found successfully."
+
       - name: Azure login
         uses: azure/login@v2
         with:
@@ -22,20 +35,22 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Verify script exists
+      - name: Verify Azure login
         shell: bash
         run: |
-          ls -la Scripts
-          test -f ./Scripts/HelloWorld.ps1
+          az account show --output table
 
       - name: Run HelloWorld.ps1 on Azure VM
         uses: azure/cli@v2
         with:
           inlineScript: |
-            $script = Get-Content ./Scripts/HelloWorld.ps1 -Raw
+            echo "Reading Scripts/HelloWorld.ps1..."
+            script=$(cat ./Scripts/HelloWorld.ps1)
 
-            az vm run-command invoke `
-              --resource-group CITRIX_BUILD `
-              --name ALFAQMGTDC01 `
-              --command-id RunPowerShellScript `
+            echo "Executing HelloWorld.ps1 on ALFAQMGTDC01..."
+
+            az vm run-command invoke \
+              --resource-group CITRIX_BUILD \
+              --name ALFAQMGTDC01 \
+              --command-id RunPowerShellScript \
               --scripts "$script"
