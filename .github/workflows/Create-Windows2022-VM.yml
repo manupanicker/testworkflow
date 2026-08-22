@@ -1,0 +1,92 @@
+name: Create Windows 2022 VM
+
+on:
+  workflow_dispatch:
+    inputs:
+      vmName:
+        description: 'Name of the new VM'
+        required: true
+        type: string
+        default: 'win2022-test'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: CITRIX_BUILD
+  LOCATION: eastus
+  VNET_NAME: vnet-eastus-2
+  SUBNET_NAME: snet-eastus-1
+  VM_SIZE: Standard_D2as_v7
+  IMAGE_PUBLISHER: microsoftwindowsserver
+  IMAGE_OFFER: windowsserver2022
+  IMAGE_SKU: 2022-datacenter-smalldisk-g2
+  IMAGE_VERSION: latest
+  OS_DISK_TYPE: Premium_LRS
+  ENABLE_ACCELERATED_NETWORKING: "true"
+  ENABLE_BOOT_DIAGNOSTICS: "true"
+  ENABLE_AUTO_UPDATES: "true"
+  PATCH_MODE: AutomaticByOS
+  DNS_SERVER: 172.16.0.4
+  SECURITY_TYPE: TrustedLaunch
+  SECURE_BOOT: "true"
+  VTPM: "true"
+
+jobs:
+  create-vm:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure PowerShell
+        shell: pwsh
+        run: |
+          Install-Module Az -Repository PSGallery -Force -AllowClobber
+
+      - name: Run VM provisioning script
+        shell: pwsh
+        env:
+          AZURE_VM_ADMIN_USERNAME: ${{ secrets.AZURE_VM_ADMIN_USERNAME }}
+          AZURE_VM_ADMIN_PASSWORD: ${{ secrets.AZURE_VM_ADMIN_PASSWORD }}
+        run: |
+          ./Scripts/Create-Windows2022-VM.ps1 `
+            -VMName "${{ inputs.vmName }}" `
+            -ResourceGroupName "$env:RESOURCE_GROUP" `
+            -Location "$env:LOCATION" `
+            -VNetName "$env:VNET_NAME" `
+            -SubnetName "$env:SUBNET_NAME" `
+            -VMSize "$env:VM_SIZE" `
+            -ImagePublisher "$env:IMAGE_PUBLISHER" `
+            -ImageOffer "$env:IMAGE_OFFER" `
+            -ImageSku "$env:IMAGE_SKU" `
+            -ImageVersion "$env:IMAGE_VERSION" `
+            -OSDiskType "$env:OS_DISK_TYPE" `
+            -EnableAcceleratedNetworking $env:ENABLE_ACCELERATED_NETWORKING `
+            -EnableBootDiagnostics $env:ENABLE_BOOT_DIAGNOSTICS `
+            -EnableAutoUpdates $env:ENABLE_AUTO_UPDATES `
+            -PatchMode "$env:PATCH_MODE" `
+            -SecurityType "$env:SECURITY_TYPE" `
+            -SecureBoot $env:SECURE_BOOT `
+            -VTPM $env:VTPM
+
+      - name: Verify VM
+        shell: bash
+        env:
+          VM_NAME: ${{ inputs.vmName }}
+        run: |
+          az vm show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$VM_NAME" \
+            --show-details \
+            --query "{Name:name,Size:hardwareProfile.vmSize,PowerState:powerState}" \
+            --output table
