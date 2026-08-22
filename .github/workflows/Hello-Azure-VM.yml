@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Azure login
         uses: azure/login@v2
         with:
@@ -19,16 +22,14 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Verify Azure login
-        run: |
-          az account show --output table
-
-      - name: Run Hello World on Azure VM
+      - name: Run HelloWorld.ps1 on Azure VM
         uses: azure/cli@v2
         with:
           inlineScript: |
-            az vm run-command invoke \
-              --resource-group CITRIX_BUILD \
-              --name ALFAQMGTDC01 \
-              --command-id RunPowerShellScript \
-              --scripts "Write-Output 'Hello World from GitHub'; Write-Output ('ComputerName: ' + \$env:COMPUTERNAME); Write-Output ('Time: ' + (Get-Date).ToString('o'))"
+            $script = Get-Content ./HelloWorld.ps1 -Raw
+
+            az vm run-command invoke `
+              --resource-group CITRIX_BUILD `
+              --name ALFAQMGTDC01 `
+              --command-id RunPowerShellScript `
+              --scripts "$script"
