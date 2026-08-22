@@ -1,0 +1,60 @@
+name: Create Windows 2022 VM - Terraform
+
+on:
+  workflow_dispatch:
+    inputs:
+      vm_name:
+        description: 'Azure VM name'
+        required: true
+        type: string
+        default: win2022-tf-test
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ARM_USE_OIDC: true
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  TF_VAR_vm_name: ${{ inputs.vm_name }}
+  TF_VAR_admin_password: ${{ secrets.AZURE_VM_ADMIN_PASSWORD }}
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        working-directory: Terraform
+        run: terraform init
+
+      - name: Terraform Validate
+        working-directory: Terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: Terraform
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: Terraform
+        run: terraform apply -auto-approve tfplan
+
+      - name: Terraform Output
+        working-directory: Terraform
+        run: terraform output
