@@ -47,37 +47,35 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Install Azure PowerShell
-        shell: pwsh
-        run: |
-          Install-Module Az -Repository PSGallery -Force -AllowClobber
+          enable-AzPSSession: true
 
       - name: Run VM provisioning script
-        shell: pwsh
+        uses: azure/powershell@v2
         env:
           AZURE_VM_ADMIN_USERNAME: ${{ secrets.AZURE_VM_ADMIN_USERNAME }}
           AZURE_VM_ADMIN_PASSWORD: ${{ secrets.AZURE_VM_ADMIN_PASSWORD }}
-        run: |
-          ./Scripts/Create-Windows2022-VM.ps1 `
-            -VMName "${{ inputs.vmName }}" `
-            -ResourceGroupName "$env:RESOURCE_GROUP" `
-            -Location "$env:LOCATION" `
-            -VNetName "$env:VNET_NAME" `
-            -SubnetName "$env:SUBNET_NAME" `
-            -VMSize "$env:VM_SIZE" `
-            -ImagePublisher "$env:IMAGE_PUBLISHER" `
-            -ImageOffer "$env:IMAGE_OFFER" `
-            -ImageSku "$env:IMAGE_SKU" `
-            -ImageVersion "$env:IMAGE_VERSION" `
-            -OSDiskType "$env:OS_DISK_TYPE" `
-            -EnableAcceleratedNetworking ([bool]::Parse($env:ENABLE_ACCELERATED_NETWORKING)) `
-            -EnableBootDiagnostics ([bool]::Parse($env:ENABLE_BOOT_DIAGNOSTICS)) `
-            -EnableAutoUpdates ([bool]::Parse($env:ENABLE_AUTO_UPDATES)) `
-            -PatchMode "$env:PATCH_MODE" `
-            -SecurityType "$env:SECURITY_TYPE" `
-            -SecureBoot ([bool]::Parse($env:SECURE_BOOT)) `
-            -VTPM ([bool]::Parse($env:VTPM))
+        with:
+          azPSVersion: latest
+          inlineScript: |
+            ./Scripts/Create-Windows2022-VM.ps1 `
+              -VMName "${{ inputs.vmName }}" `
+              -ResourceGroupName "$env:RESOURCE_GROUP" `
+              -Location "$env:LOCATION" `
+              -VNetName "$env:VNET_NAME" `
+              -SubnetName "$env:SUBNET_NAME" `
+              -VMSize "$env:VM_SIZE" `
+              -ImagePublisher "$env:IMAGE_PUBLISHER" `
+              -ImageOffer "$env:IMAGE_OFFER" `
+              -ImageSku "$env:IMAGE_SKU" `
+              -ImageVersion "$env:IMAGE_VERSION" `
+              -OSDiskType "$env:OS_DISK_TYPE" `
+              -EnableAcceleratedNetworking ([bool]::Parse($env:ENABLE_ACCELERATED_NETWORKING)) `
+              -EnableBootDiagnostics ([bool]::Parse($env:ENABLE_BOOT_DIAGNOSTICS)) `
+              -EnableAutoUpdates ([bool]::Parse($env:ENABLE_AUTO_UPDATES)) `
+              -PatchMode "$env:PATCH_MODE" `
+              -SecurityType "$env:SECURITY_TYPE" `
+              -SecureBoot ([bool]::Parse($env:SECURE_BOOT)) `
+              -VTPM ([bool]::Parse($env:VTPM))
 
       - name: Verify VM
         shell: bash
