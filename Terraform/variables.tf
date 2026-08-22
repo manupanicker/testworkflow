@@ -4,33 +4,33 @@ variable "vm_name" {
 }
 
 variable "resource_group_name" {
-  type        = string
-  default     = "CITRIX_BUILD"
+  type    = string
+  default = "CITRIX_BUILD"
 }
 
 variable "location" {
-  type        = string
-  default     = "eastus"
+  type    = string
+  default = "eastus"
 }
 
 variable "vnet_name" {
-  type        = string
-  default     = "vnet-eastus-2"
+  type    = string
+  default = "vnet-eastus-2"
 }
 
 variable "subnet_name" {
-  type        = string
-  default     = "snet-eastus-1"
+  type    = string
+  default = "snet-eastus-1"
 }
 
 variable "vm_size" {
-  type        = string
-  default     = "Standard_D2as_v7"
+  type    = string
+  default = "Standard_D2as_v7"
 }
 
 variable "dns_server" {
-  type        = string
-  default     = "172.16.0.4"
+  type    = string
+  default = "172.16.0.4"
 }
 
 variable "image_publisher" {
@@ -56,4 +56,9 @@ variable "image_version" {
 variable "os_disk_type" {
   type    = string
   default = "Premium_LRS"
+}
+
+variable "admin_password" {
+  type      = string
+  sensitive = true
 }
