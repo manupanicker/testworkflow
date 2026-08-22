@@ -7,10 +7,6 @@ on:
         description: 'Existing Azure VM name'
         required: true
         type: string
-      citrixMediaPath:
-        description: 'UNC path to the Citrix CVAD media share'
-        required: true
-        type: string
 
 permissions:
   id-token: write
@@ -18,6 +14,8 @@ permissions:
 
 env:
   RESOURCE_GROUP: CITRIX_BUILD
+  STORAGE_ACCOUNT: ctxmedia
+  STORAGE_CONTAINER: cvad
 
 jobs:
   install-licensing:
@@ -44,24 +42,58 @@ jobs:
           Write-Output "Target VM: $($vm.Name)"
           Write-Output "Power state: $((Get-AzVM -ResourceGroupName $env:RESOURCE_GROUP -Name $env:VM_NAME -Status).Statuses | Where-Object Code -like 'PowerState/*' | Select-Object -ExpandProperty DisplayStatus)"
 
+      - name: Create short-lived Blob SAS
+        uses: azure/powershell@v2
+        env:
+          STORAGE_ACCOUNT: ${{ env.STORAGE_ACCOUNT }}
+          STORAGE_CONTAINER: ${{ env.STORAGE_CONTAINER }}
+        with:
+          azPSVersion: latest
+          inlineScript: |
+            $ctx = New-AzStorageContext -StorageAccountName $env:STORAGE_ACCOUNT -UseConnectedAccount
+
+            $startTime = (Get-Date).ToUniversalTime().AddMinutes(-5)
+            $expiryTime = (Get-Date).ToUniversalTime().AddHours(2)
+
+            $sasUri = New-AzStorageContainerSASToken `
+              -Context $ctx `
+              -Name $env:STORAGE_CONTAINER `
+              -Permission rl `
+              -Protocol HttpsOnly `
+              -StartTime $startTime `
+              -ExpiryTime $expiryTime `
+              -FullUri
+
+            if ([string]::IsNullOrWhiteSpace($sasUri)) {
+              throw 'Failed to generate a Blob user-delegation SAS URI.'
+            }
+
+            Write-Output 'Short-lived Blob SAS generated successfully.'
+            "::add-mask::$sasUri"
+            "BLOB_SAS_URI=$sasUri" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Install Citrix Licensing with Azure VM Run Command
         uses: azure/powershell@v2
         env:
           VM_NAME: ${{ inputs.vmName }}
-          CITRIX_MEDIA_PATH: ${{ inputs.citrixMediaPath }}
+          BLOB_SAS_URI: ${{ env.BLOB_SAS_URI }}
         with:
           azPSVersion: latest
           inlineScript: |
             $parameters = @{
-              CitrixMediaPath = $env:CITRIX_MEDIA_PATH
+              BlobContainerSasUri = $env:BLOB_SAS_URI
             }
 
-            Invoke-AzVMRunCommand `
+            $result = Invoke-AzVMRunCommand `
               -ResourceGroupName $env:RESOURCE_GROUP `
               -VMName $env:VM_NAME `
               -CommandId 'RunPowerShellScript' `
               -ScriptPath './Scripts/Install-Citrix-Licensing.ps1' `
               -Parameter $parameters
+
+            $result.Value | ForEach-Object {
+              Write-Output $_.Message
+            }
 
       - name: Installation complete
         shell: pwsh
