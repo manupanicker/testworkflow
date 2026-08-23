@@ -22,6 +22,9 @@ permissions:
   id-token: write
   contents: read
 
+env:
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
 jobs:
   grant-access:
     runs-on: ubuntu-latest
@@ -41,10 +44,21 @@ jobs:
         uses: azure/powershell@v2
         with:
           azPSVersion: latest
+          errorActionPreference: Stop
+          failOnStandardError: true
           inlineScript: |
+            $ErrorActionPreference = 'Stop'
+
+            Write-Host "Setting Azure PowerShell subscription context..."
+            $context = Set-AzContext -SubscriptionId $env:AZURE_SUBSCRIPTION_ID -ErrorAction Stop
+
+            if (-not $context) {
+              throw "Unable to set Azure PowerShell subscription context."
+            }
+
+            Write-Host "Azure subscription context: $($context.Subscription.Id)"
+
             & '${{ github.workspace }}/Scripts/Grant-CitrixMediaBlobAccess.ps1' `
               -StorageAccountName '${{ inputs.storage_account_name }}' `
               -ResourceGroupName '${{ inputs.resource_group_name }}' `
               -PrincipalObjectId '${{ inputs.principal_object_id }}'
-          errorActionPreference: Stop
-          failOnStandardError: true
