@@ -1,0 +1,58 @@
+name: Log Workflow Runs
+
+on:
+  workflow_run:
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+jobs:
+  append-log:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Append workflow result
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          RUN_STATUS: ${{ github.event.workflow_run.status }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_ACTOR: ${{ github.event.workflow_run.actor.login }}
+          RUN_COMMIT: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_STARTED: ${{ github.event.workflow_run.run_started_at }}
+        shell: bash
+        run: |
+          printf '%s | %s | #%s | %s | %s | %s | %s | %s | %s\n' \
+            "$RUN_STARTED" \
+            "$WORKFLOW_NAME" \
+            "$RUN_NUMBER" \
+            "$RUN_STATUS" \
+            "$RUN_CONCLUSION" \
+            "$RUN_BRANCH" \
+            "$RUN_ACTOR" \
+            "$RUN_COMMIT" \
+            "$RUN_URL" >> .github/workflow.log
+
+      - name: Commit workflow log
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflow.log
+          git commit -m "Log workflow run $RUN_ID"
+          for attempt in 1 2 3; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            sleep 2
+          done
+          exit 1
