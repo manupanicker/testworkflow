@@ -50,10 +50,7 @@ jobs:
               throw "VM '$($vm.Name)' does not have a user-assigned managed identity attached. Expected '$env:CITRIX_BUILD_IDENTITY'."
             }
 
-            $identity = Get-AzUserAssignedIdentity `
-              -ResourceGroupName $env:RESOURCE_GROUP `
-              -Name $env:CITRIX_BUILD_IDENTITY `
-              -ErrorAction Stop
+            $identity = Get-AzUserAssignedIdentity -ResourceGroupName $env:RESOURCE_GROUP -Name $env:CITRIX_BUILD_IDENTITY -ErrorAction Stop
 
             if ($null -eq $vm.Identity.UserAssignedIdentities.Keys -or $vm.Identity.UserAssignedIdentities.Keys -notcontains $identity.Id) {
               throw "VM '$($vm.Name)' is not using '$env:CITRIX_BUILD_IDENTITY'. Attach the Citrix build managed identity before running this workflow."
@@ -69,24 +66,16 @@ jobs:
         with:
           azPSVersion: latest
           inlineScript: |
-            $parameters = @{
-              StorageAccountName = $env:STORAGE_ACCOUNT
-              StorageContainer   = $env:STORAGE_CONTAINER
-              BlobPrefix         = $env:BLOB_PREFIX
-              LocalMediaRoot     = $env:LOCAL_MEDIA_ROOT
-            }
-
             Write-Output "Installing Citrix Delivery Controller on $env:VM_NAME..."
-            Write-Output "Media: $env:STORAGE_ACCOUNT/$env:STORAGE_CONTAINER/$env:BLOB_PREFIX"
-            Write-Output "Local media: $env:LOCAL_MEDIA_ROOT"
+            Write-Output "Media: https://ctxmedia.blob.core.windows.net/cvad/x64/"
+            Write-Output "Local media: C:\Source\CitrixCVAD"
             Write-Output "SQL Express: not installed (Citrix /nosql)"
 
             $result = Invoke-AzVMRunCommand `
               -ResourceGroupName $env:RESOURCE_GROUP `
               -VMName $env:VM_NAME `
               -CommandId 'RunPowerShellScript' `
-              -ScriptPath './Scripts/Install-Citrix-DDC.ps1' `
-              -Parameter $parameters
+              -ScriptPath './Scripts/Install-Citrix-DDC.ps1'
 
             $result.Value | ForEach-Object {
               Write-Output $_.Message
