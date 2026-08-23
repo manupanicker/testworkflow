@@ -55,33 +55,38 @@ jobs:
             $startTime = (Get-Date).ToUniversalTime().AddMinutes(-5)
             $expiryTime = (Get-Date).ToUniversalTime().AddHours(2)
 
-            $sasUri = New-AzStorageContainerSASToken `
+            # Generate a user-delegation SAS token. Do not pass the raw SAS
+            # through Run Command because '&' is a reserved character for the
+            # Windows Run Command extension.
+            $sasToken = New-AzStorageContainerSASToken `
               -Context $ctx `
               -Name $env:STORAGE_CONTAINER `
               -Permission rl `
               -Protocol HttpsOnly `
               -StartTime $startTime `
-              -ExpiryTime $expiryTime `
-              -FullUri
+              -ExpiryTime $expiryTime
 
-            if ([string]::IsNullOrWhiteSpace($sasUri)) {
-              throw 'Failed to generate a Blob user-delegation SAS URI.'
+            if ([string]::IsNullOrWhiteSpace($sasToken)) {
+              throw 'Failed to generate a Blob user-delegation SAS token.'
             }
 
+            $sasToken = $sasToken.TrimStart('?')
+            $sasBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sasToken))
+
             Write-Output 'Short-lived Blob SAS generated successfully.'
-            "::add-mask::$sasUri"
-            "BLOB_SAS_URI=$sasUri" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            "::add-mask::$sasBase64"
+            "BLOB_SAS_BASE64=$sasBase64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install Citrix Licensing with Azure VM Run Command
         uses: azure/powershell@v2
         env:
           VM_NAME: ${{ inputs.vmName }}
-          BLOB_SAS_URI: ${{ env.BLOB_SAS_URI }}
+          BLOB_SAS_BASE64: ${{ env.BLOB_SAS_BASE64 }}
         with:
           azPSVersion: latest
           inlineScript: |
             $parameters = @{
-              BlobContainerSasUri = $env:BLOB_SAS_URI
+              BlobSasBase64 = $env:BLOB_SAS_BASE64
             }
 
             $result = Invoke-AzVMRunCommand `
