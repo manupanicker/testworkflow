@@ -7,11 +7,6 @@ on:
         description: 'Existing Azure VM name'
         required: true
         type: string
-      installSqlExpress:
-        description: 'Install SQL Server Express on the Delivery Controller'
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   id-token: write
@@ -45,7 +40,6 @@ jobs:
         uses: azure/powershell@v2
         env:
           VM_NAME: ${{ inputs.vmName }}
-          EXPECTED_IDENTITY: ${{ env.CITRIX_BUILD_IDENTITY }}
         with:
           azPSVersion: latest
           inlineScript: |
@@ -53,16 +47,16 @@ jobs:
             Write-Output "Target VM: $($vm.Name)"
 
             if ($null -eq $vm.Identity -or $vm.Identity.Type -notmatch 'UserAssigned') {
-              throw "VM '$($vm.Name)' does not have a user-assigned managed identity attached. Expected '$env:EXPECTED_IDENTITY'."
+              throw "VM '$($vm.Name)' does not have a user-assigned managed identity attached. Expected '$env:CITRIX_BUILD_IDENTITY'."
             }
 
             $identity = Get-AzUserAssignedIdentity `
               -ResourceGroupName $env:RESOURCE_GROUP `
-              -Name $env:EXPECTED_IDENTITY `
+              -Name $env:CITRIX_BUILD_IDENTITY `
               -ErrorAction Stop
 
             if ($null -eq $vm.Identity.UserAssignedIdentities.Keys -or $vm.Identity.UserAssignedIdentities.Keys -notcontains $identity.Id) {
-              throw "VM '$($vm.Name)' is not using '$env:EXPECTED_IDENTITY'. Attach the Citrix build managed identity before running this workflow."
+              throw "VM '$($vm.Name)' is not using '$env:CITRIX_BUILD_IDENTITY'. Attach the Citrix build managed identity before running this workflow."
             }
 
             Write-Output "Verified managed identity: $($identity.Name)"
@@ -72,7 +66,6 @@ jobs:
         uses: azure/powershell@v2
         env:
           VM_NAME: ${{ inputs.vmName }}
-          INSTALL_SQL: ${{ inputs.installSqlExpress }}
         with:
           azPSVersion: latest
           inlineScript: |
@@ -81,13 +74,12 @@ jobs:
               StorageContainer   = $env:STORAGE_CONTAINER
               BlobPrefix         = $env:BLOB_PREFIX
               LocalMediaRoot     = $env:LOCAL_MEDIA_ROOT
-              InstallSqlExpress  = $env:INSTALL_SQL
             }
 
             Write-Output "Installing Citrix Delivery Controller on $env:VM_NAME..."
             Write-Output "Media: $env:STORAGE_ACCOUNT/$env:STORAGE_CONTAINER/$env:BLOB_PREFIX"
             Write-Output "Local media: $env:LOCAL_MEDIA_ROOT"
-            Write-Output "SQL Express: $env:INSTALL_SQL"
+            Write-Output "SQL Express: not installed (Citrix /nosql)"
 
             $result = Invoke-AzVMRunCommand `
               -ResourceGroupName $env:RESOURCE_GROUP `
