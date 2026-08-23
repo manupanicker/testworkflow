@@ -12,7 +12,7 @@ param(
 
     [Parameter(Mandatory = $false)]
     #[string]$LocalMediaRoot = 'C:\Source\CitrixCVAD'
-    [string]$LocalMediaRoot = 'C:\Source\CVADInstaller'
+    [string]$LocalMediaRoot = 'C:\Source\CVADInstaller\CVAD'
 )
 
 $ErrorActionPreference = 'Stop'
