@@ -27,7 +27,6 @@ Write-Host ''
 
 # ===========================================================================
 # FUNCTION: Get-AzCopy
-# Downloads azcopy if not already present on the VM.
 # ===========================================================================
 function Get-AzCopy {
     param(
@@ -42,10 +41,9 @@ function Get-AzCopy {
     }
 
     Write-Host 'azcopy not found - downloading...'
-
     New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
 
-    $azcopyZip = Join-Path $InstallPath 'azcopy.zip'
+    $azcopyZip   = Join-Path $InstallPath 'azcopy.zip'
     $extractPath = Join-Path $InstallPath 'extracted'
 
     Invoke-WebRequest `
@@ -56,11 +54,8 @@ function Get-AzCopy {
     Write-Host 'Extracting azcopy...'
     Expand-Archive -Path $azcopyZip -DestinationPath $extractPath -Force
 
-    $exe = Get-ChildItem `
-        -Path    $extractPath `
-        -Filter  'azcopy.exe' `
-        -Recurse |
-        Select-Object -First 1
+    $exe = Get-ChildItem -Path $extractPath -Filter 'azcopy.exe' -Recurse |
+           Select-Object -First 1
 
     if ($null -eq $exe) {
         throw 'azcopy.exe not found after extraction.'
@@ -68,13 +63,11 @@ function Get-AzCopy {
 
     Copy-Item -Path $exe.FullName -Destination $azcopyExe -Force
     Write-Host ('azcopy installed: ' + $azcopyExe)
-
     return $azcopyExe
 }
 
 # ===========================================================================
 # FUNCTION: Invoke-AzCopyDownload
-# Uses azcopy with VM managed identity to download blobs recursively.
 # ===========================================================================
 function Invoke-AzCopyDownload {
     param(
@@ -83,10 +76,7 @@ function Invoke-AzCopyDownload {
         [Parameter(Mandatory = $true)] [string]$Destination
     )
 
-    # MSI tells azcopy to use the VM managed identity automatically
-    $env:AZCOPY_AUTO_LOGIN_TYPE = 'MSI'
-
-    # Suppress azcopy telemetry prompt
+    $env:AZCOPY_AUTO_LOGIN_TYPE  = 'MSI'
     $env:AZCOPY_CONCURRENCY_VALUE = 'AUTO'
 
     Write-Host ('Source      : ' + $SourceUrl)
@@ -112,8 +102,44 @@ function Invoke-AzCopyDownload {
     Write-Host ('azcopy exit code: ' + $process.ExitCode)
 
     if ($process.ExitCode -ne 0) {
-        throw ('azcopy failed with exit code ' + $process.ExitCode + '. Verify managed identity has Storage Blob Data Reader on the container.')
+        throw ('FATAL: azcopy failed with exit code ' + $process.ExitCode)
     }
+}
+
+# ===========================================================================
+# FUNCTION: Test-CitrixServicesRunning
+# Returns $true only when all three core DDC services are running.
+# ===========================================================================
+function Test-CitrixServicesRunning {
+
+    $expectedServices = @(
+        'CitrixBrokerService',
+        'CitrixConfigurationService',
+        'CitrixADIdentityService'
+    )
+
+    $allRunning = $true
+
+    foreach ($svcName in $expectedServices) {
+        $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+
+        if ($null -eq $svc) {
+            Write-Host ('  [MISSING] ' + $svcName)
+            $allRunning = $false
+        }
+        elseif ($svc.Status -ne 'Running') {
+            Write-Host ('  [STOPPED] ' + $svcName + ' - attempting start...')
+            Start-Service -Name $svcName -ErrorAction SilentlyContinue
+            $svc.Refresh()
+            Write-Host ('  [STATUS ] ' + $svcName + ' -> ' + $svc.Status)
+            if ($svc.Status -ne 'Running') { $allRunning = $false }
+        }
+        else {
+            Write-Host ('  [RUNNING] ' + $svcName)
+        }
+    }
+
+    return $allRunning
 }
 
 # ===========================================================================
@@ -126,28 +152,30 @@ if (-not (Test-Path -LiteralPath $LocalMediaRoot)) {
     New-Item -ItemType Directory -Path $LocalMediaRoot -Force | Out-Null
 }
 
-# Step 1 - Get azcopy
-$azcopyExe = Get-AzCopy -InstallPath 'C:\azcopy'
-
-# Step 2 - Build source URL
-# Trailing * tells azcopy to copy contents of the prefix, not the prefix folder itself
-$sourceUrl = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer + '/' + $BlobPrefix + '*'
-
-# Step 3 - Download media
-Invoke-AzCopyDownload `
-    -AzCopyExe   $azcopyExe `
-    -SourceUrl   $sourceUrl `
-    -Destination $LocalMediaRoot
-
-Write-Host ''
-Write-Host 'Media download complete.'
-Write-Host ''
-
-# Step 4 - Locate installer
+# Download media only if installer not already present
 $installer = Join-Path $LocalMediaRoot 'XenDesktop Setup\XenDesktopServerSetup.exe'
 
 if (-not (Test-Path -LiteralPath $installer)) {
-    Write-Host 'Installer not found at expected path - searching recursively...'
+    Write-Host 'Installer not found locally - downloading media from Blob Storage...'
+    $azcopyExe = Get-AzCopy -InstallPath 'C:\azcopy'
+    $sourceUrl  = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer + '/' + $BlobPrefix + '*'
+
+    Invoke-AzCopyDownload `
+        -AzCopyExe   $azcopyExe `
+        -SourceUrl   $sourceUrl `
+        -Destination $LocalMediaRoot
+
+    Write-Host 'Media download complete.'
+    Write-Host ''
+}
+else {
+    Write-Host 'Installer already present - skipping download.'
+    Write-Host ''
+}
+
+# Search for installer if not at expected path
+if (-not (Test-Path -LiteralPath $installer)) {
+    Write-Host 'Searching for installer recursively...'
     $candidate = Get-ChildItem `
         -Path    $LocalMediaRoot `
         -Filter  'XenDesktopServerSetup.exe' `
@@ -156,7 +184,7 @@ if (-not (Test-Path -LiteralPath $installer)) {
         Select-Object -First 1
 
     if ($null -eq $candidate) {
-        throw ('XenDesktopServerSetup.exe not found under ' + $LocalMediaRoot + '. Verify the x64/ media structure in Blob Storage.')
+        throw ('FATAL: XenDesktopServerSetup.exe not found under ' + $LocalMediaRoot)
     }
 
     $installer = $candidate.FullName
@@ -165,7 +193,7 @@ if (-not (Test-Path -LiteralPath $installer)) {
 Write-Host ('Installer path: ' + $installer)
 Write-Host ''
 
-# Step 5 - Run installer
+# Installer arguments
 $arguments = @(
     '/components',              'controller,desktopstudio',
     '/configure_firewall',
@@ -175,7 +203,8 @@ $arguments = @(
     '/noreboot'
 )
 
-Write-Host 'Starting Citrix Delivery Controller installation...'
+# Run the installer
+Write-Host 'Running Citrix DDC installer...'
 Write-Host ('Command: ' + $installer + ' ' + ($arguments -join ' '))
 Write-Host ''
 
@@ -192,49 +221,47 @@ $stopwatch.Stop()
 
 Write-Host ('Installer exit code : ' + $process.ExitCode)
 Write-Host ('Elapsed time        : ' + $stopwatch.Elapsed.ToString('hh\:mm\:ss'))
-
-if ($process.ExitCode -ne 0) {
-    throw ('Citrix Delivery Controller installer failed with exit code ' + $process.ExitCode)
-}
-
-# Step 6 - Verify services
 Write-Host ''
-Write-Host 'Verifying Citrix services...'
 
-$expectedServices = @(
-    'CitrixBrokerService',
-    'CitrixConfigurationService',
-    'CitrixADIdentityService'
-)
+if ($process.ExitCode -eq 0) {
 
-$allRunning = $true
+    # Installer completed - verify services
+    Write-Host 'Installer reported success. Verifying Citrix services...'
 
-foreach ($svcName in $expectedServices) {
-    $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-    if ($null -eq $svc) {
-        Write-Host ('  [MISSING] ' + $svcName)
-        $allRunning = $false
-    }
-    elseif ($svc.Status -ne 'Running') {
-        Write-Host ('  [STOPPED] ' + $svcName + ' - attempting start...')
-        Start-Service -Name $svcName -ErrorAction SilentlyContinue
-        $svc.Refresh()
-        Write-Host ('  [STATUS ] ' + $svcName + ' -> ' + $svc.Status)
-        if ($svc.Status -ne 'Running') { $allRunning = $false }
+    if (Test-CitrixServicesRunning) {
+        Write-Host ''
+        Write-Host '============================================================'
+        Write-Host ' Citrix Delivery Controller installed successfully.'
+        Write-Host ('  VM hostname : ' + $env:COMPUTERNAME)
+        Write-Host ('  Timestamp   : ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' UTC')
+        Write-Host ('  Duration    : ' + $stopwatch.Elapsed.ToString('hh\:mm\:ss'))
+        Write-Host '============================================================'
+        Write-Host 'INSTALL_COMPLETE'
     }
     else {
-        Write-Host ('  [RUNNING] ' + $svcName)
+        throw 'FATAL: Installer exited 0 but one or more Citrix services failed to start.'
     }
-}
 
-if (-not $allRunning) {
-    throw 'One or more Citrix services failed to start. Review service status above.'
 }
+elseif ($process.ExitCode -eq 14) {
 
-Write-Host ''
-Write-Host '============================================================'
-Write-Host ' Citrix Delivery Controller installation completed successfully.'
-Write-Host ('  VM hostname : ' + $env:COMPUTERNAME)
-Write-Host ('  Timestamp   : ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' UTC')
-Write-Host ('  Duration    : ' + $stopwatch.Elapsed.ToString('hh\:mm\:ss'))
-Write-Host '============================================================'
+    # Check if services are already running (resume after previous reboot)
+    Write-Host 'Exit code 14 - checking if services are already running from a previous pass...'
+
+    if (Test-CitrixServicesRunning) {
+        Write-Host ''
+        Write-Host '============================================================'
+        Write-Host ' Citrix Delivery Controller services are running.'
+        Write-Host ('  VM hostname : ' + $env:COMPUTERNAME)
+        Write-Host ('  Timestamp   : ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' UTC')
+        Write-Host '============================================================'
+        Write-Host 'INSTALL_COMPLETE'
+    }
+    else {
+        Write-Host 'REBOOT_REQUIRED: Installer requires a reboot to continue.'
+    }
+
+}
+else {
+    throw ('FATAL: Installer failed with exit code ' + $process.ExitCode)
+}
