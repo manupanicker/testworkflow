@@ -13,12 +13,17 @@ permissions:
   contents: read
 
 env:
-  RESOURCE_GROUP:       CITRIX_BUILD
-  STORAGE_ACCOUNT:      ctxmedia
-  STORAGE_CONTAINER:    cvad
-  BLOB_PREFIX:          x64/
-  LOCAL_MEDIA_ROOT:     C:\Source\CitrixCVAD
+  RESOURCE_GROUP:        CITRIX_BUILD
+  STORAGE_ACCOUNT:       ctxmedia
+  STORAGE_CONTAINER:     cvad
+  BLOB_PREFIX:           x64/
+  LOCAL_MEDIA_ROOT:      C:\Source\CitrixCVAD
   CITRIX_BUILD_IDENTITY: CitrixBuildVMIdentity
+  MAX_ATTEMPTS:          "6"
+  REBOOT_WAIT_SECONDS:   "120"
+  SETTLE_WAIT_SECONDS:   "30"
+  VM_READY_RETRIES:      "10"
+  VM_READY_INTERVAL:     "30"
 
 jobs:
   install-ddc:
@@ -33,20 +38,20 @@ jobs:
         uses: actions/checkout@v4
 
       # ---------------------------------------------------------------
-      # 2. Azure login (OIDC — no stored secrets)
+      # 2. Azure login (OIDC)
       # ---------------------------------------------------------------
       - name: Azure login
         uses: azure/login@v2
         with:
-          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id:          ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:          ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id:    ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           enable-AzPSSession: true
 
       # ---------------------------------------------------------------
-      # 3. Verify target VM exists and has the correct managed identity
+      # 3. Verify VM and managed identity
       # ---------------------------------------------------------------
-      - name: Verify target VM and Citrix build identity
+      - name: Verify target VM and managed identity
         uses: azure/powershell@v2
         env:
           VM_NAME: ${{ inputs.vmName }}
@@ -63,7 +68,7 @@ jobs:
             Write-Output "VM Size    : $($vm.HardwareProfile.VmSize)"
 
             if ($null -eq $vm.Identity -or $vm.Identity.Type -notmatch 'UserAssigned') {
-                throw "VM '$($vm.Name)' does not have a user-assigned managed identity attached. Expected '$env:CITRIX_BUILD_IDENTITY'."
+                throw "VM '$($vm.Name)' does not have a user-assigned managed identity attached."
             }
 
             $identity = Get-AzUserAssignedIdentity `
@@ -72,7 +77,7 @@ jobs:
                 -ErrorAction Stop
 
             if ($vm.Identity.UserAssignedIdentities.Keys -notcontains $identity.Id) {
-                throw "VM '$($vm.Name)' does not have '$env:CITRIX_BUILD_IDENTITY' attached. Attach the managed identity before running this workflow."
+                throw "VM '$($vm.Name)' does not have '$env:CITRIX_BUILD_IDENTITY' attached."
             }
 
             Write-Output "Managed identity : $($identity.Name)"
@@ -80,67 +85,130 @@ jobs:
             Write-Output "Verification passed."
 
       # ---------------------------------------------------------------
-      # 4. Run the DDC installation script on the target VM
+      # 4. Install DDC with reboot retry loop
+      #    Handles up to 4 reboots (MAX_ATTEMPTS = 6 gives enough buffer)
+      #    Success signal : INSTALL_COMPLETE in VM output
+      #    Reboot signal  : REBOOT_REQUIRED in VM output
+      #    Failure signal : FATAL: in VM output
       # ---------------------------------------------------------------
-      - name: Install Citrix Delivery Controller
+      - name: Install Citrix DDC with reboot handling
         uses: azure/powershell@v2
         env:
           VM_NAME: ${{ inputs.vmName }}
         with:
           azPSVersion: latest
           inlineScript: |
-            Write-Output "=================================================="
-            Write-Output "Starting DDC installation on: $env:VM_NAME"
-            Write-Output "Storage account : $env:STORAGE_ACCOUNT"
-            Write-Output "Container       : $env:STORAGE_CONTAINER"
-            Write-Output "Blob prefix     : $env:BLOB_PREFIX"
-            Write-Output "Local media     : $env:LOCAL_MEDIA_ROOT"
-            Write-Output "=================================================="
+            $maxAttempts       = [int]$env:MAX_ATTEMPTS
+            $rebootWait        = [int]$env:REBOOT_WAIT_SECONDS
+            $settleWait        = [int]$env:SETTLE_WAIT_SECONDS
+            $vmReadyRetries    = [int]$env:VM_READY_RETRIES
+            $vmReadyInterval   = [int]$env:VM_READY_INTERVAL
+            $attempt           = 0
+            $installed         = $false
 
-            $params = @{
-                StorageAccountName = $env:STORAGE_ACCOUNT
-                StorageContainer   = $env:STORAGE_CONTAINER
-                BlobPrefix         = $env:BLOB_PREFIX
-                LocalMediaRoot     = $env:LOCAL_MEDIA_ROOT
+            while (-not $installed -and $attempt -lt $maxAttempts) {
+
+                $attempt++
+                Write-Output "=================================================="
+                Write-Output "Install attempt $attempt of $maxAttempts"
+                Write-Output "=================================================="
+
+                $params = @{
+                    StorageAccountName = $env:STORAGE_ACCOUNT
+                    StorageContainer   = $env:STORAGE_CONTAINER
+                    BlobPrefix         = $env:BLOB_PREFIX
+                    LocalMediaRoot     = $env:LOCAL_MEDIA_ROOT
+                }
+
+                $result = Invoke-AzVMRunCommand `
+                    -ResourceGroupName $env:RESOURCE_GROUP `
+                    -VMName            $env:VM_NAME `
+                    -CommandId         'RunPowerShellScript' `
+                    -ScriptPath        './Scripts/Install-Citrix-DDC.ps1' `
+                    -Parameter         $params `
+                    -ErrorAction       Stop
+
+                $output = ($result.Value | ForEach-Object { $_.Message }) -join "`n"
+                Write-Output $output
+                Write-Output "---------- End VM output ----------"
+
+                if ($output -match 'INSTALL_COMPLETE') {
+
+                    Write-Output "DDC installation completed successfully on attempt $attempt."
+                    $installed = $true
+
+                }
+                elseif ($output -match 'REBOOT_REQUIRED') {
+
+                    if ($attempt -ge $maxAttempts) {
+                        throw "Max attempts ($maxAttempts) reached - still requiring reboot. Check VM manually."
+                    }
+
+                    Write-Output ""
+                    Write-Output "Reboot required - rebooting $env:VM_NAME (attempt $attempt)..."
+
+                    Restart-AzVM `
+                        -ResourceGroupName $env:RESOURCE_GROUP `
+                        -Name $env:VM_NAME `
+                        -Force | Out-Null
+
+                    Write-Output "VM reboot initiated. Waiting $rebootWait seconds..."
+                    Start-Sleep -Seconds $rebootWait
+
+                    # Poll until VM is running
+                    $vmReady   = $false
+                    $waitTry   = 0
+
+                    while (-not $vmReady -and $waitTry -lt $vmReadyRetries) {
+                        $waitTry++
+                        $vm    = Get-AzVM `
+                            -ResourceGroupName $env:RESOURCE_GROUP `
+                            -Name $env:VM_NAME `
+                            -Status
+                        $state = ($vm.Statuses | Where-Object { $_.Code -like 'PowerState/*' }).DisplayStatus
+                        Write-Output "VM state: $state (poll $waitTry of $vmReadyRetries)"
+
+                        if ($state -eq 'VM running') {
+                            $vmReady = $true
+                        }
+                        else {
+                            Start-Sleep -Seconds $vmReadyInterval
+                        }
+                    }
+
+                    if (-not $vmReady) {
+                        throw "VM did not come back online after reboot on attempt $attempt."
+                    }
+
+                    Write-Output "VM is online. Waiting $settleWait seconds for services to settle..."
+                    Start-Sleep -Seconds $settleWait
+
+                }
+                elseif ($output -match 'FATAL:') {
+
+                    throw "DDC installation failed on attempt $attempt. Check output above."
+
+                }
+                else {
+
+                    throw "Unexpected output on attempt $attempt. Could not determine install status."
+
+                }
             }
 
-            $result = Invoke-AzVMRunCommand `
-                -ResourceGroupName $env:RESOURCE_GROUP `
-                -VMName            $env:VM_NAME `
-                -CommandId         'RunPowerShellScript' `
-                -ScriptPath        './Scripts/Install-Citrix-DDC.ps1' `
-                -Parameter         $params `
-                -ErrorAction       Stop
-
-            # Surface all output from the VM
-            Write-Output ""
-            Write-Output "---------- VM output ----------"
-            $result.Value | ForEach-Object { Write-Output $_.Message }
-            Write-Output "---------- End VM output ------"
-
-            # Fail the workflow step if the Run Command itself did not succeed
-            if ($result.Status -ne 'Succeeded') {
-                throw "VM Run Command returned status '$($result.Status)'. Check the output above for details."
+            if (-not $installed) {
+                throw "DDC installation did not complete after $maxAttempts attempts."
             }
-
-            # Fail if the script output contains a known failure signal
-            $outputText = ($result.Value | ForEach-Object { $_.Message }) -join "`n"
-            if ($outputText -match 'installer failed with exit code' -or $outputText -match 'throw') {
-                throw "DDC installation script reported a failure. Check the output above."
-            }
-
-            Write-Output ""
-            Write-Output "DDC installation completed successfully on $env:VM_NAME."
 
       # ---------------------------------------------------------------
       # 5. Summary
       # ---------------------------------------------------------------
-      - name: DDC installation complete
+      - name: Installation complete
         shell: pwsh
         run: |
           Write-Output "=================================================="
           Write-Output "Workflow complete"
-          Write-Output "VM      : ${{ inputs.vmName }}"
-          Write-Output "Time    : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')"
-          Write-Output "Status  : Success"
+          Write-Output "VM     : ${{ inputs.vmName }}"
+          Write-Output "Time   : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')"
+          Write-Output "Status : Success"
           Write-Output "=================================================="
