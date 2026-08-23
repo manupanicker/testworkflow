@@ -19,17 +19,17 @@ $ProgressPreference    = 'SilentlyContinue'
 Write-Host '============================================================'
 Write-Host ' Citrix Delivery Controller Installation'
 Write-Host '============================================================'
-Write-Host "Storage account : https://${StorageAccountName}.blob.core.windows.net/${StorageContainer}"
-Write-Host "Blob prefix     : $BlobPrefix"
-Write-Host "Local media     : $LocalMediaRoot"
-Write-Host "SQL Express     : NOT installed (/nosql)"
+Write-Host ('Storage account : https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer)
+Write-Host ('Blob prefix     : ' + $BlobPrefix)
+Write-Host ('Local media     : ' + $LocalMediaRoot)
+Write-Host 'SQL Express     : NOT installed (/nosql)'
 Write-Host ''
 
 # ===========================================================================
 # FUNCTION: Get-ManagedIdentityToken
-# Requests an Azure Storage OAuth token from the VM managed identity via IMDS.
 # ===========================================================================
 function Get-ManagedIdentityToken {
+
     $tokenUri = 'http://169.254.169.254/metadata/identity/oauth2/token' +
                 '?api-version=2018-02-01' +
                 '&resource=https%3A%2F%2Fstorage.azure.com%2F'
@@ -52,9 +52,8 @@ function Get-ManagedIdentityToken {
 
 # ===========================================================================
 # FUNCTION: Get-BlobList
-# Lists all blobs under a given prefix using the Azure Blob REST API.
-# FIX: Variables in URI strings are wrapped in ${} to prevent PowerShell
-#      from including the following ? or & characters in the variable name.
+# FIX: URI built via string concatenation — no literal & inside quoted strings.
+#      Run Command restricted language mode disallows & in double-quoted strings.
 # ===========================================================================
 function Get-BlobList {
     param(
@@ -64,13 +63,12 @@ function Get-BlobList {
         [Parameter(Mandatory = $true)] [string]$Prefix
     )
 
-    # Validate container name before building the URI
     if ([string]::IsNullOrWhiteSpace($Container) -or
         $Container -notmatch '^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$') {
-        throw "Invalid Blob container name: '$Container'. Container name must be lowercase alphanumeric with optional hyphens."
+        throw ('Invalid Blob container name: ' + $Container)
     }
 
-    Write-Host "Listing blobs — account: $Account  container: $Container  prefix: $Prefix"
+    Write-Host ('Listing blobs — account: ' + $Account + '  container: ' + $Container + '  prefix: ' + $Prefix)
 
     $allBlobs = [System.Collections.Generic.List[string]]::new()
     $marker   = $null
@@ -78,23 +76,22 @@ function Get-BlobList {
     do {
         $encodedPrefix = [Uri]::EscapeDataString($Prefix)
 
-        # CRITICAL FIX: use ${Account} and ${Container} so PowerShell does not
-        # try to parse the ? as part of the variable name, which produces a
-        # broken URI like /=container&comp=list when Container is empty.
-        $uri = "https://${Account}.blob.core.windows.net/${Container}" +
-               "?restype=container&comp=list&prefix=${encodedPrefix}"
+        # Build URI via concatenation — no & inside a quoted string
+        $uriBase   = 'https://' + $Account + '.blob.core.windows.net/' + $Container
+        $uriParams = '?restype=container' + '&comp=list' + '&prefix=' + $encodedPrefix
+        $uri       = $uriBase + $uriParams
 
         if (-not [string]::IsNullOrWhiteSpace($marker)) {
-            $uri += "&marker=$([Uri]::EscapeDataString($marker))"
+            $uri = $uri + '&marker=' + [Uri]::EscapeDataString($marker)
         }
 
-        Write-Host "Listing Blob URI: $uri"
+        Write-Host ('Listing Blob URI: ' + $uri)
 
         $response = Invoke-RestMethod `
             -Method Get `
             -Uri $uri `
             -Headers @{
-                Authorization  = "Bearer $Token"
+                Authorization  = ('Bearer ' + $Token)
                 'x-ms-version' = '2023-11-03'
             } `
             -UseBasicParsing
@@ -115,8 +112,6 @@ function Get-BlobList {
 
 # ===========================================================================
 # FUNCTION: ConvertTo-BlobUriPath
-# Percent-encodes each path segment of a blob name individually so that
-# forward slashes (path separators) are preserved in the URI.
 # ===========================================================================
 function ConvertTo-BlobUriPath {
     param([Parameter(Mandatory = $true)] [string]$BlobName)
@@ -127,8 +122,7 @@ function ConvertTo-BlobUriPath {
 
 # ===========================================================================
 # FUNCTION: Download-Blob
-# Downloads a single blob to a local destination path.
-# FIX: URI uses ${Account} and ${Container} for the same reason as Get-BlobList.
+# FIX: URI built via string concatenation — no & or ${ } in quoted strings.
 # ===========================================================================
 function Download-Blob {
     param(
@@ -147,16 +141,16 @@ function Download-Blob {
 
     $encodedBlobName = ConvertTo-BlobUriPath -BlobName $BlobName
 
-    # CRITICAL FIX: use ${Account} and ${Container}
-    $uri = "https://${Account}.blob.core.windows.net/${Container}/${encodedBlobName}"
+    # Build URI via concatenation
+    $uri = 'https://' + $Account + '.blob.core.windows.net/' + $Container + '/' + $encodedBlobName
 
-    Write-Host "Downloading: $BlobName -> $Destination"
+    Write-Host ('Downloading: ' + $BlobName)
 
     Invoke-WebRequest `
         -Method Get `
         -Uri $uri `
         -Headers @{
-            Authorization  = "Bearer $Token"
+            Authorization  = ('Bearer ' + $Token)
             'x-ms-version' = '2023-11-03'
         } `
         -OutFile $Destination `
@@ -169,11 +163,11 @@ function Download-Blob {
 
 # Ensure local media root exists
 if (-not (Test-Path -LiteralPath $LocalMediaRoot)) {
-    Write-Host "Creating local media directory: $LocalMediaRoot"
+    Write-Host ('Creating local media directory: ' + $LocalMediaRoot)
     New-Item -ItemType Directory -Path $LocalMediaRoot -Force | Out-Null
 }
 
-# Authenticate
+# Authenticate via managed identity
 $token = Get-ManagedIdentityToken
 Write-Host 'Managed identity authentication succeeded.'
 Write-Host ''
@@ -187,18 +181,16 @@ $blobNames = @(Get-BlobList `
     -Prefix    $BlobPrefix)
 
 if ($blobNames.Count -eq 0) {
-    throw "No blobs were found under prefix '$BlobPrefix' in container '$StorageContainer'. Verify the media has been uploaded."
+    throw ('No blobs found under prefix ' + $BlobPrefix + ' in container ' + $StorageContainer + '. Verify the media has been uploaded.')
 }
 
-Write-Host "Found $($blobNames.Count) blob(s). Starting download..."
+Write-Host ('Found ' + $blobNames.Count + ' blob(s). Starting download...')
 Write-Host ''
 
 # Download all blobs preserving relative folder structure
 foreach ($blobName in $blobNames) {
 
     $relativePath = $blobName.Substring($BlobPrefix.Length)
-
-    # Skip zero-length relative paths (the prefix folder entry itself)
     if ([string]::IsNullOrWhiteSpace($relativePath)) { continue }
 
     $relativePath = $relativePath.Replace('/', '\')
@@ -220,7 +212,7 @@ Write-Host ''
 $installer = Join-Path $LocalMediaRoot 'XenDesktop Setup\XenDesktopServerSetup.exe'
 
 if (-not (Test-Path -LiteralPath $installer)) {
-    Write-Host "Installer not found at expected path. Searching recursively..."
+    Write-Host 'Installer not found at expected path — searching recursively...'
     $candidate = Get-ChildItem `
         -Path    $LocalMediaRoot `
         -Filter  'XenDesktopServerSetup.exe' `
@@ -229,13 +221,13 @@ if (-not (Test-Path -LiteralPath $installer)) {
         Select-Object -First 1
 
     if ($null -eq $candidate) {
-        throw "XenDesktopServerSetup.exe was not found under '$LocalMediaRoot'. Verify the media structure in Blob Storage."
+        throw ('XenDesktopServerSetup.exe was not found under ' + $LocalMediaRoot + '. Verify the media structure in Blob Storage.')
     }
 
     $installer = $candidate.FullName
 }
 
-Write-Host "Installer path: $installer"
+Write-Host ('Installer path: ' + $installer)
 Write-Host ''
 
 # Build argument list
@@ -249,28 +241,28 @@ $arguments = @(
 )
 
 Write-Host 'Starting Citrix Delivery Controller installation...'
-Write-Host "Command: $installer $($arguments -join ' ')"
+Write-Host ('Command: ' + $installer + ' ' + ($arguments -join ' '))
 Write-Host ''
 
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 $process = Start-Process `
-    -FilePath        $installer `
-    -ArgumentList    $arguments `
+    -FilePath     $installer `
+    -ArgumentList $arguments `
     -Wait `
     -PassThru `
     -NoNewWindow
 
 $stopwatch.Stop()
 
-Write-Host "Installer exit code : $($process.ExitCode)"
-Write-Host "Elapsed time        : $($stopwatch.Elapsed.ToString('hh\:mm\:ss'))"
+Write-Host ('Installer exit code : ' + $process.ExitCode)
+Write-Host ('Elapsed time        : ' + $stopwatch.Elapsed.ToString('hh\:mm\:ss'))
 
 if ($process.ExitCode -ne 0) {
-    throw "Citrix Delivery Controller installer failed with exit code $($process.ExitCode)."
+    throw ('Citrix Delivery Controller installer failed with exit code ' + $process.ExitCode)
 }
 
-# Verify key services started
+# Verify services
 Write-Host ''
 Write-Host 'Verifying Citrix services...'
 
@@ -285,30 +277,29 @@ $allRunning = $true
 foreach ($svcName in $expectedServices) {
     $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
     if ($null -eq $svc) {
-        Write-Host "  [MISSING] $svcName"
+        Write-Host ('  [MISSING] ' + $svcName)
         $allRunning = $false
     }
     elseif ($svc.Status -ne 'Running') {
-        Write-Host "  [STOPPED] $svcName — attempting start..."
+        Write-Host ('  [STOPPED] ' + $svcName + ' — attempting start...')
         Start-Service -Name $svcName -ErrorAction SilentlyContinue
         $svc.Refresh()
-        $status = $svc.Status
-        Write-Host "  [STATUS ] $svcName -> $status"
-        if ($status -ne 'Running') { $allRunning = $false }
+        Write-Host ('  [STATUS ] ' + $svcName + ' -> ' + $svc.Status)
+        if ($svc.Status -ne 'Running') { $allRunning = $false }
     }
     else {
-        Write-Host "  [RUNNING] $svcName"
+        Write-Host ('  [RUNNING] ' + $svcName)
     }
 }
 
 if (-not $allRunning) {
-    throw "One or more Citrix services failed to start. Review service status above."
+    throw 'One or more Citrix services failed to start. Review service status above.'
 }
 
 Write-Host ''
 Write-Host '============================================================'
 Write-Host ' Citrix Delivery Controller installation completed successfully.'
-Write-Host "  VM hostname : $env:COMPUTERNAME"
-Write-Host "  Timestamp   : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')"
-Write-Host "  Duration    : $($stopwatch.Elapsed.ToString('hh\:mm\:ss'))"
+Write-Host ('  VM hostname : ' + $env:COMPUTERNAME)
+Write-Host ('  Timestamp   : ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' UTC')
+Write-Host ('  Duration    : ' + $stopwatch.Elapsed.ToString('hh\:mm\:ss'))
 Write-Host '============================================================'
