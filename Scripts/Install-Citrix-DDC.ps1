@@ -59,7 +59,7 @@ function Get-BlobList {
     $marker = $null
 
     do {
-        $uri = "https://$Account.blob.core.windows.net/$Container?restype=container&comp=list&prefix=$([uri]::EscapeDataString($Prefix))&include=metadata"
+        $uri = "https://$Account.blob.core.windows.net/$Container?restype=container&comp=list&prefix=$([uri]::EscapeDataString($Prefix))"
 
         if (-not [string]::IsNullOrWhiteSpace($marker)) {
             $uri += "&marker=$([uri]::EscapeDataString($marker))"
@@ -86,6 +86,17 @@ function Get-BlobList {
     return $allBlobs.ToArray()
 }
 
+function ConvertTo-BlobUriPath {
+    param(
+        [Parameter(Mandatory = $true)] [string]$BlobName
+    )
+
+    # Encode each path segment while preserving the blob's '/' separators.
+    return (($BlobName -split '/') | ForEach-Object {
+        [Uri]::EscapeDataString($_)
+    }) -join '/'
+}
+
 function Download-Blob {
     param(
         [Parameter(Mandatory = $true)] [string]$Token,
@@ -100,7 +111,8 @@ function Download-Blob {
         New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
     }
 
-    $uri = "https://$Account.blob.core.windows.net/$Container/$([string]$BlobName -replace ' ', '%20')"
+    $encodedBlobName = ConvertTo-BlobUriPath -BlobName $BlobName
+    $uri = "https://$Account.blob.core.windows.net/$Container/$encodedBlobName"
 
     Invoke-WebRequest `
         -Method Get `
@@ -113,7 +125,6 @@ function Download-Blob {
         -UseBasicParsing
 }
 
-# Ensure the target directory exists.
 if (-not (Test-Path -LiteralPath $LocalMediaRoot)) {
     New-Item -ItemType Directory -Path $LocalMediaRoot -Force | Out-Null
 }
@@ -165,11 +176,6 @@ if (-not (Test-Path -LiteralPath $installer)) {
 
 Write-Host ''
 Write-Host "Delivery Controller installer: $installer"
-
-$logDirectory = 'C:\Source\CitrixLogs'
-if (-not (Test-Path -LiteralPath $logDirectory)) {
-    New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
-}
 
 $arguments = @(
     '/components', 'controller,desktopstudio',
