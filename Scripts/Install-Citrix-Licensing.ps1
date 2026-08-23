@@ -23,7 +23,18 @@ if ([string]::IsNullOrWhiteSpace($BlobUrisBase64)) {
 
 try {
     $BlobUrisJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($BlobUrisBase64))
-    $BlobUris = @($BlobUrisJson | ConvertFrom-Json)
+    $ParsedBlobUris = ConvertFrom-Json -InputObject $BlobUrisJson
+
+    # Always flatten the JSON result into individual URI strings. This also handles
+    # a single-element JSON array without producing a nested System.Object[].
+    $BlobUris = @($ParsedBlobUris) | ForEach-Object {
+        if ($_ -is [System.Array]) {
+            $_ | ForEach-Object { [string]$_ }
+        }
+        else {
+            [string]$_
+        }
+    } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 }
 catch {
     throw "BlobUrisBase64 could not be decoded: $($_.Exception.Message)"
@@ -32,6 +43,8 @@ catch {
 if (-not $BlobUris -or $BlobUris.Count -eq 0) {
     throw 'No Blob download URLs were supplied.'
 }
+
+Write-Output "Received $($BlobUris.Count) Blob download URL(s)."
 
 $ServiceNames = @(
     'Citrix Licensing',
@@ -50,14 +63,14 @@ else {
     New-Item -Path $SourceRoot -ItemType Directory -Force | Out-Null
     New-Item -Path $MediaRoot -ItemType Directory -Force | Out-Null
 
-    Write-Output "Received $($BlobUris.Count) Blob download URL(s)."
-
     foreach ($BlobUri in $BlobUris) {
-        if ([string]::IsNullOrWhiteSpace([string]$BlobUri)) {
-            continue
+        try {
+            $Uri = [System.Uri]$BlobUri
+        }
+        catch {
+            throw "Invalid Blob download URL received: $BlobUri"
         }
 
-        $Uri = [System.Uri]$BlobUri
         $BlobPath = $Uri.AbsolutePath.TrimStart('/')
         $SlashIndex = $BlobPath.IndexOf('/')
 
@@ -77,7 +90,7 @@ else {
         New-Item -Path $LocalDirectory -ItemType Directory -Force | Out-Null
 
         Write-Output "Downloading: $BlobName"
-        Invoke-WebRequest -Uri $BlobUri -OutFile $LocalFile -UseBasicParsing
+        Invoke-WebRequest -Uri $Uri -OutFile $LocalFile -UseBasicParsing
     }
 
     $Installer = Join-Path $MediaRoot 'CitrixLicensing.exe'
