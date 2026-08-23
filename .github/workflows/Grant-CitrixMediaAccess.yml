@@ -22,9 +22,6 @@ permissions:
   id-token: write
   contents: read
 
-env:
-  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
 jobs:
   grant-access:
     runs-on: ubuntu-latest
@@ -39,6 +36,7 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
 
       - name: Grant Blob Reader Access
         uses: azure/powershell@v2
@@ -49,11 +47,11 @@ jobs:
           inlineScript: |
             $ErrorActionPreference = 'Stop'
 
-            Write-Host "Setting Azure PowerShell subscription context..."
-            $context = Set-AzContext -SubscriptionId $env:AZURE_SUBSCRIPTION_ID -ErrorAction Stop
+            Write-Host 'Verifying Azure PowerShell subscription context...'
+            $context = Get-AzContext
 
-            if (-not $context) {
-              throw "Unable to set Azure PowerShell subscription context."
+            if (-not $context -or -not $context.Subscription) {
+              throw 'Azure PowerShell session has no subscription context.'
             }
 
             Write-Host "Azure subscription context: $($context.Subscription.Id)"
