@@ -7,10 +7,12 @@ param(
     [string]$StorageContainer = 'cvad',
 
     [Parameter(Mandatory = $false)]
-    [string]$BlobPrefix = 'x64/',
+    #[string]$BlobPrefix = 'x64/',
+    [string]$BlobPrefix = '',
 
     [Parameter(Mandatory = $false)]
-    [string]$LocalMediaRoot = 'C:\Source\CitrixCVAD'
+    #[string]$LocalMediaRoot = 'C:\Source\CitrixCVAD'
+    [string]$LocalMediaRoot = 'C:\Source\CVADInstaller'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -158,7 +160,8 @@ $installer = Join-Path $LocalMediaRoot 'XenDesktop Setup\XenDesktopServerSetup.e
 if (-not (Test-Path -LiteralPath $installer)) {
     Write-Host 'Installer not found locally - downloading media from Blob Storage...'
     $azcopyExe = Get-AzCopy -InstallPath 'C:\azcopy'
-    $sourceUrl  = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer + '/' + $BlobPrefix + '*'
+    #$sourceUrl  = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer + '/' + $BlobPrefix + '*'
+    $sourceUrl = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer
 
     Invoke-AzCopyDownload `
         -AzCopyExe   $azcopyExe `
