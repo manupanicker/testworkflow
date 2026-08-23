@@ -1,0 +1,69 @@
+name: Power On or Off Windows 2022 VM
+
+on:
+  workflow_dispatch:
+    inputs:
+      vmName:
+        description: 'Azure VM name'
+        required: true
+        type: string
+      powerAction:
+        description: 'Power action to perform'
+        required: true
+        type: choice
+        options:
+          - start
+          - stop
+        default: start
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: CITRIX_BUILD
+
+jobs:
+  power-vm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify VM exists
+        shell: bash
+        run: |
+          az vm show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name '${{ inputs.vmName }}' \
+            --query name \
+            --output tsv
+
+      - name: Power on VM
+        if: inputs.powerAction == 'start'
+        shell: bash
+        run: |
+          az vm start \
+            --resource-group "$RESOURCE_GROUP" \
+            --name '${{ inputs.vmName }}'
+
+      - name: Power off VM
+        if: inputs.powerAction == 'stop'
+        shell: bash
+        run: |
+          az vm deallocate \
+            --resource-group "$RESOURCE_GROUP" \
+            --name '${{ inputs.vmName }}'
+
+      - name: Show VM power state
+        shell: bash
+        run: |
+          az vm get-instance-view \
+            --resource-group "$RESOURCE_GROUP" \
+            --name '${{ inputs.vmName }}' \
+            --query "instanceView.statuses[?starts_with(code, 'PowerState/')].displayStatus" \
+            --output tsv
