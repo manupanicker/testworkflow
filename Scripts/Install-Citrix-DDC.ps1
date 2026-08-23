@@ -16,11 +16,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+# Keep the media location deterministic. These are the same values used by the
+# DDC workflow and avoid Run Command parameter serialization changing them.
+$StorageAccountName = 'ctxmedia'
+$StorageContainer = 'cvad'
+$BlobPrefix = 'x64/'
+$LocalMediaRoot = 'C:\Source\CitrixCVAD'
+
 Write-Host '============================================================'
 Write-Host 'Citrix Delivery Controller Installation'
 Write-Host '============================================================'
 Write-Host "Source      : Azure Blob Storage"
-Write-Host "Container   : $StorageContainer"
+Write-Host "Storage     : https://$StorageAccountName.blob.core.windows.net/$StorageContainer"
 Write-Host "Blob prefix : $BlobPrefix"
 Write-Host "Local media : $LocalMediaRoot"
 Write-Host 'SQL Express : NOT installed (/nosql)'
@@ -31,11 +38,7 @@ function Get-ManagedIdentityToken {
 
     Write-Host 'Requesting Azure Storage token from VM managed identity...'
 
-    $response = Invoke-RestMethod `
-        -Method Get `
-        -Uri $tokenUri `
-        -Headers @{ Metadata = 'true' } `
-        -UseBasicParsing
+    $response = Invoke-RestMethod -Method Get -Uri $tokenUri -Headers @{ Metadata = 'true' } -UseBasicParsing
 
     if ([string]::IsNullOrWhiteSpace($response.access_token)) {
         throw 'Managed identity token was not returned by the Azure Instance Metadata Service.'
@@ -52,24 +55,27 @@ function Get-BlobList {
         [Parameter(Mandatory = $true)] [string]$Prefix
     )
 
+    if ([string]::IsNullOrWhiteSpace($Container) -or $Container -notmatch '^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$') {
+        throw "Invalid Blob container name: '$Container'"
+    }
+
     $allBlobs = [System.Collections.Generic.List[string]]::new()
     $marker = $null
 
     do {
-        $uri = "https://$Account.blob.core.windows.net/$Container?restype=container&comp=list&prefix=$([uri]::EscapeDataString($Prefix))"
+        $encodedPrefix = [Uri]::EscapeDataString($Prefix)
+        $uri = "https://$Account.blob.core.windows.net/$Container?restype=container&comp=list&prefix=$encodedPrefix"
 
         if (-not [string]::IsNullOrWhiteSpace($marker)) {
-            $uri += "&marker=$([uri]::EscapeDataString($marker))"
+            $uri += "&marker=$([Uri]::EscapeDataString($marker))"
         }
 
-        $response = Invoke-RestMethod `
-            -Method Get `
-            -Uri $uri `
-            -Headers @{
-                Authorization = "Bearer $Token"
-                'x-ms-version' = '2023-11-03'
-            } `
-            -UseBasicParsing
+        Write-Host "Listing Blob URI: $uri"
+
+        $response = Invoke-RestMethod -Method Get -Uri $uri -Headers @{
+            Authorization = "Bearer $Token"
+            'x-ms-version' = '2023-11-03'
+        } -UseBasicParsing
 
         foreach ($blob in @($response.EnumerationResults.Blobs.Blob)) {
             if ($null -ne $blob.Name -and -not [string]::IsNullOrWhiteSpace([string]$blob.Name)) {
@@ -84,13 +90,8 @@ function Get-BlobList {
 }
 
 function ConvertTo-BlobUriPath {
-    param(
-        [Parameter(Mandatory = $true)] [string]$BlobName
-    )
-
-    return (($BlobName -split '/') | ForEach-Object {
-        [Uri]::EscapeDataString($_)
-    }) -join '/'
+    param([Parameter(Mandatory = $true)] [string]$BlobName)
+    return (($BlobName -split '/') | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
 }
 
 function Download-Blob {
@@ -110,15 +111,12 @@ function Download-Blob {
     $encodedBlobName = ConvertTo-BlobUriPath -BlobName $BlobName
     $uri = "https://$Account.blob.core.windows.net/$Container/$encodedBlobName"
 
-    Invoke-WebRequest `
-        -Method Get `
-        -Uri $uri `
-        -Headers @{
-            Authorization = "Bearer $Token"
-            'x-ms-version' = '2023-11-03'
-        } `
-        -OutFile $Destination `
-        -UseBasicParsing
+    Write-Host "Downloading: $BlobName"
+
+    Invoke-WebRequest -Method Get -Uri $uri -Headers @{
+        Authorization = "Bearer $Token"
+        'x-ms-version' = '2023-11-03'
+    } -OutFile $Destination -UseBasicParsing
 }
 
 if (-not (Test-Path -LiteralPath $LocalMediaRoot)) {
@@ -128,13 +126,9 @@ if (-not (Test-Path -LiteralPath $LocalMediaRoot)) {
 $token = Get-ManagedIdentityToken
 Write-Host 'Managed identity authentication succeeded.'
 Write-Host ''
-
 Write-Host 'Listing Citrix CVAD media in Blob Storage...'
-$blobNames = @(Get-BlobList `
-    -Token $token `
-    -Account $StorageAccountName `
-    -Container $StorageContainer `
-    -Prefix $BlobPrefix)
+
+$blobNames = @(Get-BlobList -Token $token -Account $StorageAccountName -Container $StorageContainer -Prefix $BlobPrefix)
 
 if ($blobNames.Count -eq 0) {
     throw "No blobs were found under prefix '$BlobPrefix'."
@@ -144,20 +138,11 @@ Write-Host "Found $($blobNames.Count) blob(s)."
 
 foreach ($blobName in $blobNames) {
     $relativePath = $blobName.Substring($BlobPrefix.Length)
-    if ([string]::IsNullOrWhiteSpace($relativePath)) {
-        continue
-    }
+    if ([string]::IsNullOrWhiteSpace($relativePath)) { continue }
 
     $relativePath = $relativePath.Replace('/', '\')
     $destination = Join-Path $LocalMediaRoot $relativePath
-
-    Write-Host "Downloading: $blobName"
-    Download-Blob `
-        -Token $token `
-        -Account $StorageAccountName `
-        -Container $StorageContainer `
-        -BlobName $blobName `
-        -Destination $destination
+    Download-Blob -Token $token -Account $StorageAccountName -Container $StorageContainer -BlobName $blobName -Destination $destination
 }
 
 $installer = Join-Path $LocalMediaRoot 'XenDesktop Setup\XenDesktopServerSetup.exe'
@@ -173,8 +158,6 @@ if (-not (Test-Path -LiteralPath $installer)) {
 Write-Host ''
 Write-Host "Delivery Controller installer: $installer"
 
-# Match the proven Hybrid Worker DDC installation: Controller + Studio,
-# firewall configuration, no SQL Express, no experience metrics, quiet/no reboot.
 $arguments = @(
     '/components', 'controller,desktopstudio',
     '/configure_firewall',
@@ -187,13 +170,7 @@ $arguments = @(
 Write-Host 'Starting Citrix Delivery Controller installation...'
 Write-Host "Command: $installer $($arguments -join ' ')"
 
-$process = Start-Process `
-    -FilePath $installer `
-    -ArgumentList $arguments `
-    -Wait `
-    -PassThru `
-    -NoNewWindow
-
+$process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru -NoNewWindow
 Write-Host "Installer exit code: $($process.ExitCode)"
 
 if ($process.ExitCode -ne 0) {
