@@ -12,7 +12,8 @@ param(
 
     [Parameter(Mandatory = $false)]
     #[string]$LocalMediaRoot = 'C:\Source\CitrixCVAD'
-    [string]$LocalMediaRoot = 'C:\Source\CVADInstaller'
+    #[string]$LocalMediaRoot = 'C:\Source\CVADInstaller'
+    [string]$LocalMediaRoot = 'C:\Source\CVADInstaller\cvad'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -155,7 +156,8 @@ if (-not (Test-Path -LiteralPath $LocalMediaRoot)) {
 }
 
 # Download media only if installer not already present
-$installer = Join-Path $LocalMediaRoot 'XenDesktop Setup\XenDesktopServerSetup.exe'
+#$installer = Join-Path $LocalMediaRoot 'XenDesktop Setup\XenDesktopServerSetup.exe'
+$installer = Join-Path $LocalMediaRoot 'x64\XenDesktop Setup\XenDesktopServerSetup.exe'
 
 if (-not (Test-Path -LiteralPath $installer)) {
     Write-Host 'Installer not found locally - downloading media from Blob Storage...'
