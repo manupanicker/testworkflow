@@ -57,27 +57,24 @@ jobs:
             $startTime = (Get-Date).ToUniversalTime().AddMinutes(-5)
             $expiryTime = (Get-Date).ToUniversalTime().AddHours(2)
 
-            # Enumerate the private container using the GitHub Azure identity.
-            # The VM does not need Storage permissions and does not need to list the container.
-            $blobs = @(Get-AzStorageBlob `
-              -Context $ctx `
-              -Container $env:STORAGE_CONTAINER `
-              -Prefix $env:BLOB_PREFIX `
-              -ErrorAction Stop)
+            # The media set is intentionally explicit for this Licensing workflow.
+            # This avoids requiring the GitHub identity to perform Blob data-plane
+            # listing. The VM still receives only short-lived read SAS URLs.
+            $blobNames = @(
+              "${env:BLOB_PREFIX}CitrixLicensing.exe"
+              "${env:BLOB_PREFIX}CTX_Licensing.msi"
+              "${env:BLOB_PREFIX}Citrix_Licensing_11.17.2.0_BUILD_54100.zip"
+              "${env:BLOB_PREFIX}Citrix_Licensing_11.17.2.0_BUILD_54100.zip.SHA256"
+              "${env:BLOB_PREFIX}LicensingAdmin_PowerShellSnapin_x64.msi"
+            )
 
-            $files = @($blobs | Where-Object { -not $_.Name.EndsWith('/') })
-
-            if (-not $files -or $files.Count -eq 0) {
-              throw "No blobs found under $($env:BLOB_PREFIX) in $($env:STORAGE_CONTAINER)."
-            }
-
-            $downloadUris = foreach ($blob in $files) {
-              Write-Output "Preparing SAS URL for: $($blob.Name)"
+            $downloadUris = foreach ($blobName in $blobNames) {
+              Write-Output "Preparing SAS URL for: $blobName"
 
               New-AzStorageBlobSASToken `
                 -Context $ctx `
                 -Container $env:STORAGE_CONTAINER `
-                -Blob $blob.Name `
+                -Blob $blobName `
                 -Permission r `
                 -Protocol HttpsOnly `
                 -StartTime $startTime `
@@ -91,7 +88,7 @@ jobs:
             "::add-mask::$base64"
             "BLOB_URIS_BASE64=$base64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-            Write-Output "Prepared $($files.Count) Citrix Licensing media file(s)."
+            Write-Output "Prepared $($blobNames.Count) Citrix Licensing media file URL(s)."
 
       - name: Install Citrix Licensing with Azure VM Run Command
         uses: azure/powershell@v2
