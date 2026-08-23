@@ -98,12 +98,20 @@ function Get-BlobList {
         Write-Host ('Raw prefix count : ' + @($xmlResponse.EnumerationResults.Blobs.BlobPrefix).Count)
         Write-Host ('Marker           : ' + [string]$xmlResponse.EnumerationResults.NextMarker)
 
-        foreach ($blob in @($xmlResponse.EnumerationResults.Blobs.Blob)) {
+$rawBlobs = $xmlResponse.EnumerationResults.Blobs.Blob
+if ($null -ne $rawBlobs) {
+    if ($rawBlobs -is [System.Xml.XmlElement]) {
+        $allBlobs.Add([string]$rawBlobs.Name)
+    }
+    else {
+        foreach ($blob in $rawBlobs) {
             if ($null -ne $blob.Name -and
                 -not [string]::IsNullOrWhiteSpace([string]$blob.Name)) {
                 $allBlobs.Add([string]$blob.Name)
             }
         }
+    }
+}
 
         $marker = [string]$xmlResponse.EnumerationResults.NextMarker
 
