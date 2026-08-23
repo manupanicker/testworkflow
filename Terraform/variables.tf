@@ -61,7 +61,7 @@ variable "os_disk_type" {
 variable "citrix_build_identity_name" {
   type        = string
   description = "Existing user-assigned managed identity attached to Citrix build VMs"
-  default     = "CitrixBuildIdentity"
+  default     = "CitrixBuildVMIdentity"
 }
 
 variable "citrix_build_identity_resource_group" {
