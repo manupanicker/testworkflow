@@ -51,6 +51,7 @@ jobs:
             $dryRun = [System.Convert]::ToBoolean($env:DRY_RUN)
 
             $vms = @(Get-AzVM -ResourceGroupName $resourceGroup)
+            $allNics = @(Get-AzNetworkInterface -ResourceGroupName $resourceGroup)
             $attachedNicIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
             $attachedDiskIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
@@ -68,13 +69,19 @@ jobs:
               }
             }
 
-            $orphanedNics = @(Get-AzNetworkInterface -ResourceGroupName $resourceGroup | Where-Object {
+            $orphanedNics = @($allNics | Where-Object {
               -not $_.VirtualMachine -and -not $attachedNicIds.Contains($_.Id)
             })
 
             $attachedPublicIpIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-            foreach ($nic in @(Get-AzNetworkInterface -ResourceGroupName $resourceGroup)) {
-              if (-not $attachedNicIds.Contains($nic.Id)) { continue }
+            $attachedNsgIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            foreach ($nic in $allNics) {
+              $isOrphanedNic = $orphanedNics.Id -contains $nic.Id
+              if ($isOrphanedNic) { continue }
+
+              if ($nic.NetworkSecurityGroup.Id) {
+                [void]$attachedNsgIds.Add($nic.NetworkSecurityGroup.Id)
+              }
 
               foreach ($ipConfiguration in @($nic.IpConfigurations)) {
                 if ($ipConfiguration.PublicIpAddress.Id) {
@@ -91,12 +98,26 @@ jobs:
               -not $_.ManagedBy -and -not $attachedDiskIds.Contains($_.Id)
             })
 
+            $vnets = @(Get-AzVirtualNetwork -ResourceGroupName $resourceGroup)
+            foreach ($vnet in $vnets) {
+              foreach ($subnet in @($vnet.Subnets)) {
+                if ($subnet.NetworkSecurityGroup.Id) {
+                  [void]$attachedNsgIds.Add($subnet.NetworkSecurityGroup.Id)
+                }
+              }
+            }
+
+            $orphanedNsgs = @(Get-AzNetworkSecurityGroup -ResourceGroupName $resourceGroup | Where-Object {
+              -not $attachedNsgIds.Contains($_.Id)
+            })
+
             Write-Output "Existing VMs: $($vms.Count)"
             Write-Output "Orphaned NICs: $($orphanedNics.Count)"
             Write-Output "Orphaned public IPs: $($orphanedPublicIps.Count)"
             Write-Output "Orphaned managed disks: $($orphanedDisks.Count)"
+            Write-Output "Orphaned network security groups: $($orphanedNsgs.Count)"
 
-            foreach ($resource in @($orphanedNics + $orphanedPublicIps + $orphanedDisks)) {
+            foreach ($resource in @($orphanedNics + $orphanedPublicIps + $orphanedDisks + $orphanedNsgs)) {
               Write-Output "Orphaned resource: $($resource.ResourceType)/$($resource.Name)"
             }
 
@@ -118,6 +139,11 @@ jobs:
             foreach ($disk in $orphanedDisks) {
               Remove-AzDisk -ResourceGroupName $resourceGroup -DiskName $disk.Name -Force
               Write-Output "Deleted orphaned managed disk: $($disk.Name)"
+            }
+
+            foreach ($nsg in $orphanedNsgs) {
+              Remove-AzNetworkSecurityGroup -ResourceGroupName $resourceGroup -Name $nsg.Name -Force
+              Write-Output "Deleted orphaned network security group: $($nsg.Name)"
             }
 
             Write-Output 'Orphaned VM resource cleanup completed.'
