@@ -10,10 +10,7 @@ param(
     [string]$BlobPrefix = 'x64/',
 
     [Parameter(Mandatory = $false)]
-    [string]$LocalMediaRoot = 'C:\Source\CitrixCVAD',
-
-    [Parameter(Mandatory = $false)]
-    [bool]$InstallSqlExpress = $false
+    [string]$LocalMediaRoot = 'C:\Source\CitrixCVAD'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,7 +23,7 @@ Write-Host "Source      : Azure Blob Storage"
 Write-Host "Container   : $StorageContainer"
 Write-Host "Blob prefix : $BlobPrefix"
 Write-Host "Local media : $LocalMediaRoot"
-Write-Host "SQL Express : $InstallSqlExpress"
+Write-Host 'SQL Express : NOT installed (/nosql)'
 Write-Host ''
 
 function Get-ManagedIdentityToken {
@@ -91,7 +88,6 @@ function ConvertTo-BlobUriPath {
         [Parameter(Mandatory = $true)] [string]$BlobName
     )
 
-    # Encode each path segment while preserving the blob's '/' separators.
     return (($BlobName -split '/') | ForEach-Object {
         [Uri]::EscapeDataString($_)
     }) -join '/'
@@ -152,7 +148,7 @@ foreach ($blobName in $blobNames) {
         continue
     }
 
-    $relativePath = $relativePath.Replace('/', '\\')
+    $relativePath = $relativePath.Replace('/', '\')
     $destination = Join-Path $LocalMediaRoot $relativePath
 
     Write-Host "Downloading: $blobName"
@@ -177,16 +173,16 @@ if (-not (Test-Path -LiteralPath $installer)) {
 Write-Host ''
 Write-Host "Delivery Controller installer: $installer"
 
+# Match the proven Hybrid Worker DDC installation: Controller + Studio,
+# firewall configuration, no SQL Express, no experience metrics, quiet/no reboot.
 $arguments = @(
     '/components', 'controller,desktopstudio',
     '/configure_firewall',
+    '/nosql',
+    '/disableexperiencemetrics',
     '/quiet',
     '/noreboot'
 )
-
-if (-not $InstallSqlExpress) {
-    $arguments += '/nosql'
-}
 
 Write-Host 'Starting Citrix Delivery Controller installation...'
 Write-Host "Command: $installer $($arguments -join ' ')"
