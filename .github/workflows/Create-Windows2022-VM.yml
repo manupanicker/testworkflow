@@ -8,6 +8,11 @@ on:
         required: true
         type: string
         default: 'win2022-test'
+      citrixBuildIdentityName:
+        description: 'Existing user-assigned managed identity for Citrix build VMs'
+        required: true
+        type: string
+        default: 'CitrixBuildIdentity'
 
 permissions:
   id-token: write
@@ -56,6 +61,8 @@ jobs:
           AZURE_VM_ADMIN_PASSWORD: ${{ secrets.AZURE_VM_ADMIN_PASSWORD }}
         with:
           azPSVersion: latest
+          errorActionPreference: Stop
+          failOnStandardError: true
           inlineScript: |
             ./Scripts/Create-Windows2022-VM.ps1 `
               -VMName "${{ inputs.vmName }}" `
@@ -69,6 +76,8 @@ jobs:
               -ImageSku "$env:IMAGE_SKU" `
               -ImageVersion "$env:IMAGE_VERSION" `
               -OSDiskType "$env:OS_DISK_TYPE" `
+              -CitrixBuildIdentityName "${{ inputs.citrixBuildIdentityName }}" `
+              -CitrixBuildIdentityResourceGroup "$env:RESOURCE_GROUP" `
               -EnableAcceleratedNetworking ([bool]::Parse($env:ENABLE_ACCELERATED_NETWORKING)) `
               -EnableBootDiagnostics ([bool]::Parse($env:ENABLE_BOOT_DIAGNOSTICS)) `
               -EnableAutoUpdates ([bool]::Parse($env:ENABLE_AUTO_UPDATES)) `
