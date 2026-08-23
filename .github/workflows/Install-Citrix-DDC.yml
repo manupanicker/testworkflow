@@ -149,8 +149,7 @@ jobs:
 
                     Restart-AzVM `
                         -ResourceGroupName $env:RESOURCE_GROUP `
-                        -Name $env:VM_NAME `
-                        -Force | Out-Null
+                        -Name $env:VM_NAME | out-null
 
                     Write-Output "VM reboot initiated. Waiting $rebootWait seconds..."
                     Start-Sleep -Seconds $rebootWait
