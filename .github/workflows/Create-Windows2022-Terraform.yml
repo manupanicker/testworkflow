@@ -8,6 +8,11 @@ on:
         required: true
         type: string
         default: win2022-tf-test
+      citrix_build_identity_name:
+        description: 'Managed identity attached to Citrix build VMs'
+        required: true
+        type: string
+        default: CitrixBuildVMIdentity
 
 permissions:
   id-token: write
@@ -20,6 +25,7 @@ env:
   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   TF_VAR_vm_name: ${{ inputs.vm_name }}
   TF_VAR_admin_password: ${{ secrets.AZURE_VM_ADMIN_PASSWORD }}
+  TF_VAR_citrix_build_identity_name: ${{ inputs.citrix_build_identity_name }}
 
 jobs:
   terraform:
