@@ -26,191 +26,124 @@ Write-Host 'SQL Express     : NOT installed (/nosql)'
 Write-Host ''
 
 # ===========================================================================
-# FUNCTION: Get-ManagedIdentityToken
+# FUNCTION: Get-AzCopy
+# Downloads azcopy if not already present on the VM.
 # ===========================================================================
-function Get-ManagedIdentityToken {
-
-    $tokenUri = 'http://169.254.169.254/metadata/identity/oauth2/token' +
-                '?api-version=2018-02-01' +
-                '&resource=https%3A%2F%2Fstorage.azure.com%2F'
-
-    Write-Host 'Requesting Azure Storage token from VM managed identity...'
-
-    $response = Invoke-RestMethod `
-        -Method Get `
-        -Uri $tokenUri `
-        -Headers @{ Metadata = 'true' } `
-        -UseBasicParsing
-
-    if ([string]::IsNullOrWhiteSpace($response.access_token)) {
-        throw 'Managed identity token was not returned by the Azure Instance Metadata Service.'
-    }
-
-    Write-Host 'Managed identity token obtained.'
-    return $response.access_token
-}
-
-# ===========================================================================
-# FUNCTION: Get-BlobList
-# ===========================================================================
-function Get-BlobList {
+function Get-AzCopy {
     param(
-        [Parameter(Mandatory = $true)] [string]$Token,
-        [Parameter(Mandatory = $true)] [string]$Account,
-        [Parameter(Mandatory = $true)] [string]$Container,
-        [Parameter(Mandatory = $true)] [string]$Prefix
+        [Parameter(Mandatory = $true)] [string]$InstallPath
     )
 
-    if ([string]::IsNullOrWhiteSpace($Container) -or
-        $Container -notmatch '^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$') {
-        throw ('Invalid Blob container name: ' + $Container)
+    $azcopyExe = Join-Path $InstallPath 'azcopy.exe'
+
+    if (Test-Path -LiteralPath $azcopyExe) {
+        Write-Host ('azcopy already present: ' + $azcopyExe)
+        return $azcopyExe
     }
 
-    Write-Host ('Listing blobs - account: ' + $Account + '  container: ' + $Container + '  prefix: ' + $Prefix)
+    Write-Host 'azcopy not found - downloading...'
 
-    $allBlobs = [System.Collections.Generic.List[string]]::new()
-    $marker   = $null
+    New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
 
-    do {
-        $encodedPrefix = [Uri]::EscapeDataString($Prefix)
+    $azcopyZip = Join-Path $InstallPath 'azcopy.zip'
+    $extractPath = Join-Path $InstallPath 'extracted'
 
-        $uriBase   = 'https://' + $Account + '.blob.core.windows.net/' + $Container
-        $uriParams = '?restype=container' + '&comp=list' + '&prefix=' + $encodedPrefix
-        $uri       = $uriBase + $uriParams
+    Invoke-WebRequest `
+        -Uri 'https://aka.ms/downloadazcopy-v10-windows' `
+        -OutFile $azcopyZip `
+        -UseBasicParsing
 
-        if (-not [string]::IsNullOrWhiteSpace($marker)) {
-            $uri = $uri + '&marker=' + [Uri]::EscapeDataString($marker)
-        }
+    Write-Host 'Extracting azcopy...'
+    Expand-Archive -Path $azcopyZip -DestinationPath $extractPath -Force
 
-        Write-Host ('Listing Blob URI: ' + $uri)
+    $exe = Get-ChildItem `
+        -Path    $extractPath `
+        -Filter  'azcopy.exe' `
+        -Recurse |
+        Select-Object -First 1
 
-        $xmlResponse = Invoke-RestMethod `
-            -Method Get `
-            -Uri $uri `
-            -Headers @{
-                Authorization  = ('Bearer ' + $Token)
-                'x-ms-version' = '2023-11-03'
-            } `
-            -UseBasicParsing
-
-        # DEBUG - show raw counts to diagnose empty results
-        Write-Host ('Raw blob count   : ' + @($xmlResponse.EnumerationResults.Blobs.Blob).Count)
-        Write-Host ('Raw prefix count : ' + @($xmlResponse.EnumerationResults.Blobs.BlobPrefix).Count)
-        Write-Host ('Marker           : ' + [string]$xmlResponse.EnumerationResults.NextMarker)
-
-$rawBlobs = $xmlResponse.EnumerationResults.Blobs.Blob
-if ($null -ne $rawBlobs) {
-    if ($rawBlobs -is [System.Xml.XmlElement]) {
-        $allBlobs.Add([string]$rawBlobs.Name)
+    if ($null -eq $exe) {
+        throw 'azcopy.exe not found after extraction.'
     }
-    else {
-        foreach ($blob in $rawBlobs) {
-            if ($null -ne $blob.Name -and
-                -not [string]::IsNullOrWhiteSpace([string]$blob.Name)) {
-                $allBlobs.Add([string]$blob.Name)
-            }
-        }
-    }
-}
 
-        $marker = [string]$xmlResponse.EnumerationResults.NextMarker
+    Copy-Item -Path $exe.FullName -Destination $azcopyExe -Force
+    Write-Host ('azcopy installed: ' + $azcopyExe)
 
-    } while (-not [string]::IsNullOrWhiteSpace($marker))
-
-    return $allBlobs.ToArray()
+    return $azcopyExe
 }
 
 # ===========================================================================
-# FUNCTION: ConvertTo-BlobUriPath
+# FUNCTION: Invoke-AzCopyDownload
+# Uses azcopy with VM managed identity to download blobs recursively.
 # ===========================================================================
-function ConvertTo-BlobUriPath {
-    param([Parameter(Mandatory = $true)] [string]$BlobName)
-
-    return (($BlobName -split '/') |
-            ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
-}
-
-# ===========================================================================
-# FUNCTION: Download-Blob
-# ===========================================================================
-function Download-Blob {
+function Invoke-AzCopyDownload {
     param(
-        [Parameter(Mandatory = $true)] [string]$Token,
-        [Parameter(Mandatory = $true)] [string]$Account,
-        [Parameter(Mandatory = $true)] [string]$Container,
-        [Parameter(Mandatory = $true)] [string]$BlobName,
+        [Parameter(Mandatory = $true)] [string]$AzCopyExe,
+        [Parameter(Mandatory = $true)] [string]$SourceUrl,
         [Parameter(Mandatory = $true)] [string]$Destination
     )
 
-    $destinationDirectory = Split-Path -Parent $Destination
+    # MSI tells azcopy to use the VM managed identity automatically
+    $env:AZCOPY_AUTO_LOGIN_TYPE = 'MSI'
 
-    if (-not (Test-Path -LiteralPath $destinationDirectory)) {
-        New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+    # Suppress azcopy telemetry prompt
+    $env:AZCOPY_CONCURRENCY_VALUE = 'AUTO'
+
+    Write-Host ('Source      : ' + $SourceUrl)
+    Write-Host ('Destination : ' + $Destination)
+    Write-Host 'Starting azcopy download...'
+
+    $azcopyArgs = @(
+        'copy',
+        $SourceUrl,
+        $Destination,
+        '--recursive',
+        '--overwrite', 'ifSourceNewer',
+        '--log-level', 'INFO'
+    )
+
+    $process = Start-Process `
+        -FilePath     $AzCopyExe `
+        -ArgumentList $azcopyArgs `
+        -Wait `
+        -PassThru `
+        -NoNewWindow
+
+    Write-Host ('azcopy exit code: ' + $process.ExitCode)
+
+    if ($process.ExitCode -ne 0) {
+        throw ('azcopy failed with exit code ' + $process.ExitCode + '. Verify managed identity has Storage Blob Data Reader on the container.')
     }
-
-    $encodedBlobName = ConvertTo-BlobUriPath -BlobName $BlobName
-    $uri = 'https://' + $Account + '.blob.core.windows.net/' + $Container + '/' + $encodedBlobName
-
-    Write-Host ('Downloading: ' + $BlobName)
-
-    Invoke-WebRequest `
-        -Method Get `
-        -Uri $uri `
-        -Headers @{
-            Authorization  = ('Bearer ' + $Token)
-            'x-ms-version' = '2023-11-03'
-        } `
-        -OutFile $Destination `
-        -UseBasicParsing
 }
 
 # ===========================================================================
 # MAIN
 # ===========================================================================
 
+# Ensure local media root exists
 if (-not (Test-Path -LiteralPath $LocalMediaRoot)) {
     Write-Host ('Creating local media directory: ' + $LocalMediaRoot)
     New-Item -ItemType Directory -Path $LocalMediaRoot -Force | Out-Null
 }
 
-$token = Get-ManagedIdentityToken
-Write-Host 'Managed identity authentication succeeded.'
-Write-Host ''
+# Step 1 - Get azcopy
+$azcopyExe = Get-AzCopy -InstallPath 'C:\azcopy'
 
-Write-Host 'Listing Citrix CVAD media in Blob Storage...'
-$blobNames = @(Get-BlobList `
-    -Token     $token `
-    -Account   $StorageAccountName `
-    -Container $StorageContainer `
-    -Prefix    $BlobPrefix)
+# Step 2 - Build source URL
+# Trailing * tells azcopy to copy contents of the prefix, not the prefix folder itself
+$sourceUrl = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer + '/' + $BlobPrefix + '*'
 
-if ($blobNames.Count -eq 0) {
-    throw ('No blobs found under prefix ' + $BlobPrefix + ' in container ' + $StorageContainer + '. Check debug output above for raw counts.')
-}
-
-Write-Host ('Found ' + $blobNames.Count + ' blob(s). Starting download...')
-Write-Host ''
-
-foreach ($blobName in $blobNames) {
-
-    $relativePath = $blobName.Substring($BlobPrefix.Length)
-    if ([string]::IsNullOrWhiteSpace($relativePath)) { continue }
-
-    $relativePath = $relativePath.Replace('/', '\')
-    $destination  = Join-Path $LocalMediaRoot $relativePath
-
-    Download-Blob `
-        -Token       $token `
-        -Account     $StorageAccountName `
-        -Container   $StorageContainer `
-        -BlobName    $blobName `
-        -Destination $destination
-}
+# Step 3 - Download media
+Invoke-AzCopyDownload `
+    -AzCopyExe   $azcopyExe `
+    -SourceUrl   $sourceUrl `
+    -Destination $LocalMediaRoot
 
 Write-Host ''
-Write-Host 'All blobs downloaded.'
+Write-Host 'Media download complete.'
 Write-Host ''
 
+# Step 4 - Locate installer
 $installer = Join-Path $LocalMediaRoot 'XenDesktop Setup\XenDesktopServerSetup.exe'
 
 if (-not (Test-Path -LiteralPath $installer)) {
@@ -223,7 +156,7 @@ if (-not (Test-Path -LiteralPath $installer)) {
         Select-Object -First 1
 
     if ($null -eq $candidate) {
-        throw ('XenDesktopServerSetup.exe was not found under ' + $LocalMediaRoot + '. Verify the media structure in Blob Storage.')
+        throw ('XenDesktopServerSetup.exe not found under ' + $LocalMediaRoot + '. Verify the x64/ media structure in Blob Storage.')
     }
 
     $installer = $candidate.FullName
@@ -232,6 +165,7 @@ if (-not (Test-Path -LiteralPath $installer)) {
 Write-Host ('Installer path: ' + $installer)
 Write-Host ''
 
+# Step 5 - Run installer
 $arguments = @(
     '/components',              'controller,desktopstudio',
     '/configure_firewall',
@@ -263,6 +197,7 @@ if ($process.ExitCode -ne 0) {
     throw ('Citrix Delivery Controller installer failed with exit code ' + $process.ExitCode)
 }
 
+# Step 6 - Verify services
 Write-Host ''
 Write-Host 'Verifying Citrix services...'
 
