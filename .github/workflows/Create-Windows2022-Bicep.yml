@@ -8,6 +8,11 @@ on:
         required: true
         type: string
         default: win2022-bicep-test
+      citrix_build_identity_name:
+        description: 'Existing user-assigned managed identity for Citrix build VMs'
+        required: true
+        type: string
+        default: CitrixBuildIdentity
 
 permissions:
   id-token: write
@@ -45,6 +50,7 @@ jobs:
             --resource-group CITRIX_BUILD \
             --template-file Bicep/main.bicep \
             --parameters vmName='${{ inputs.vm_name }}' \
+                         citrixBuildIdentityName='${{ inputs.citrix_build_identity_name }}' \
                          adminPassword="$BICEP_ADMIN_PASSWORD"
 
       - name: Deploy Bicep
@@ -56,6 +62,7 @@ jobs:
             --name "vm-${{ inputs.vm_name }}" \
             --template-file Bicep/main.bicep \
             --parameters vmName='${{ inputs.vm_name }}' \
+                         citrixBuildIdentityName='${{ inputs.citrix_build_identity_name }}' \
                          adminPassword="$BICEP_ADMIN_PASSWORD"
 
       - name: Show deployment outputs
