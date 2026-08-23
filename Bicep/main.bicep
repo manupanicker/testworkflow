@@ -26,6 +26,9 @@ param adminUsername string = 'azureuser'
 @description('Windows administrator password')
 param adminPassword string
 
+@description('Shared user-assigned managed identity used by Citrix build VMs')
+param citrixBuildIdentityName string = 'CitrixBuildIdentity'
+
 @description('Windows Server image publisher')
 param imagePublisher string = 'microsoftwindowsserver'
 
@@ -46,6 +49,11 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' existing = {
 resource subnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
   parent: vnet
   name: subnetName
+}
+
+resource citrixBuildIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: citrixBuildIdentityName
+  scope: resourceGroup(resourceGroupName)
 }
 
 resource nic 'Microsoft.Network/networkInterfaces@2024-05-01' = {
@@ -76,6 +84,12 @@ resource nic 'Microsoft.Network/networkInterfaces@2024-05-01' = {
 resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   name: vmName
   location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${citrixBuildIdentity.id}': {}
+    }
+  }
   properties: {
     hardwareProfile: {
       vmSize: vmSize
@@ -137,3 +151,5 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
 output vmName string = vm.name
 output privateIpAddress string = nic.properties.ipConfigurations[0].properties.privateIPAddress
 output nicId string = nic.id
+output managedIdentityName string = citrixBuildIdentity.name
+output managedIdentityPrincipalId string = citrixBuildIdentity.properties.principalId
