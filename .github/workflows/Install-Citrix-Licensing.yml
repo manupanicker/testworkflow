@@ -16,6 +16,7 @@ env:
   RESOURCE_GROUP: CITRIX_BUILD
   STORAGE_ACCOUNT: ctxmedia
   STORAGE_CONTAINER: cvad
+  BLOB_PREFIX: Licensing/
 
 jobs:
   install-licensing:
@@ -42,11 +43,12 @@ jobs:
           Write-Output "Target VM: $($vm.Name)"
           Write-Output "Power state: $((Get-AzVM -ResourceGroupName $env:RESOURCE_GROUP -Name $env:VM_NAME -Status).Statuses | Where-Object Code -like 'PowerState/*' | Select-Object -ExpandProperty DisplayStatus)"
 
-      - name: Create short-lived Blob SAS
+      - name: Prepare Citrix Licensing media URLs
         uses: azure/powershell@v2
         env:
           STORAGE_ACCOUNT: ${{ env.STORAGE_ACCOUNT }}
           STORAGE_CONTAINER: ${{ env.STORAGE_CONTAINER }}
+          BLOB_PREFIX: ${{ env.BLOB_PREFIX }}
         with:
           azPSVersion: latest
           inlineScript: |
@@ -55,38 +57,56 @@ jobs:
             $startTime = (Get-Date).ToUniversalTime().AddMinutes(-5)
             $expiryTime = (Get-Date).ToUniversalTime().AddHours(2)
 
-            # Generate a user-delegation SAS token. Do not pass the raw SAS
-            # through Run Command because '&' is a reserved character for the
-            # Windows Run Command extension.
-            $sasToken = New-AzStorageContainerSASToken `
+            # Enumerate the private container using the GitHub Azure identity.
+            # The VM does not need Storage permissions and does not need to list the container.
+            $blobs = @(Get-AzStorageBlob `
               -Context $ctx `
-              -Name $env:STORAGE_CONTAINER `
-              -Permission rl `
-              -Protocol HttpsOnly `
-              -StartTime $startTime `
-              -ExpiryTime $expiryTime
+              -Container $env:STORAGE_CONTAINER `
+              -Prefix $env:BLOB_PREFIX `
+              -ErrorAction Stop)
 
-            if ([string]::IsNullOrWhiteSpace($sasToken)) {
-              throw 'Failed to generate a Blob user-delegation SAS token.'
+            $files = @($blobs | Where-Object { -not $_.Name.EndsWith('/') })
+
+            if (-not $files -or $files.Count -eq 0) {
+              throw "No blobs found under $($env:BLOB_PREFIX) in $($env:STORAGE_CONTAINER)."
             }
 
-            $sasToken = $sasToken.TrimStart('?')
-            $sasBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sasToken))
+            $downloadUris = foreach ($blob in $files) {
+              Write-Output "Preparing SAS URL for: $($blob.Name)"
 
-            Write-Output 'Short-lived Blob SAS generated successfully.'
-            "::add-mask::$sasBase64"
-            "BLOB_SAS_BASE64=$sasBase64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              New-AzStorageBlobSASToken `
+                -Context $ctx `
+                -Container $env:STORAGE_CONTAINER `
+                -Blob $blob.Name `
+                -Permission r `
+                -Protocol HttpsOnly `
+                -StartTime $startTime `
+                -ExpiryTime $expiryTime `
+                -FullUri
+            }
+
+            $json = @($downloadUris) | ConvertTo-Json -Compress
+            $base64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+
+            "::add-mask::$base64"
+            "BLOB_URIS_BASE64=$base64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+            Write-Output "Prepared $($files.Count) Citrix Licensing media file(s)."
 
       - name: Install Citrix Licensing with Azure VM Run Command
         uses: azure/powershell@v2
         env:
           VM_NAME: ${{ inputs.vmName }}
-          BLOB_SAS_BASE64: ${{ env.BLOB_SAS_BASE64 }}
+          BLOB_URIS_BASE64: ${{ env.BLOB_URIS_BASE64 }}
         with:
           azPSVersion: latest
           inlineScript: |
+            if ([string]::IsNullOrWhiteSpace($env:BLOB_URIS_BASE64)) {
+              throw 'BLOB_URIS_BASE64 was not populated.'
+            }
+
             $parameters = @{
-              BlobSasBase64 = $env:BLOB_SAS_BASE64
+              BlobUrisBase64 = $env:BLOB_URIS_BASE64
             }
 
             $result = Invoke-AzVMRunCommand `
