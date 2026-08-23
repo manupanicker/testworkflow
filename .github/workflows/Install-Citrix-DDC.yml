@@ -13,11 +13,11 @@ permissions:
   contents: read
 
 env:
-  RESOURCE_GROUP: CITRIX_BUILD
-  STORAGE_ACCOUNT: ctxmedia
-  STORAGE_CONTAINER: cvad
-  BLOB_PREFIX: x64/
-  LOCAL_MEDIA_ROOT: C:\Source\CitrixCVAD
+  RESOURCE_GROUP:       CITRIX_BUILD
+  STORAGE_ACCOUNT:      ctxmedia
+  STORAGE_CONTAINER:    cvad
+  BLOB_PREFIX:          x64/
+  LOCAL_MEDIA_ROOT:     C:\Source\CitrixCVAD
   CITRIX_BUILD_IDENTITY: CitrixBuildVMIdentity
 
 jobs:
@@ -25,17 +25,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ---------------------------------------------------------------
+      # 1. Checkout
+      # ---------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ---------------------------------------------------------------
+      # 2. Azure login (OIDC — no stored secrets)
+      # ---------------------------------------------------------------
       - name: Azure login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           enable-AzPSSession: true
 
+      # ---------------------------------------------------------------
+      # 3. Verify target VM exists and has the correct managed identity
+      # ---------------------------------------------------------------
       - name: Verify target VM and Citrix build identity
         uses: azure/powershell@v2
         env:
@@ -43,22 +53,35 @@ jobs:
         with:
           azPSVersion: latest
           inlineScript: |
-            $vm = Get-AzVM -ResourceGroupName $env:RESOURCE_GROUP -Name $env:VM_NAME -ErrorAction Stop
-            Write-Output "Target VM: $($vm.Name)"
+            $vm = Get-AzVM `
+                -ResourceGroupName $env:RESOURCE_GROUP `
+                -Name $env:VM_NAME `
+                -ErrorAction Stop
+
+            Write-Output "Target VM  : $($vm.Name)"
+            Write-Output "Location   : $($vm.Location)"
+            Write-Output "VM Size    : $($vm.HardwareProfile.VmSize)"
 
             if ($null -eq $vm.Identity -or $vm.Identity.Type -notmatch 'UserAssigned') {
-              throw "VM '$($vm.Name)' does not have a user-assigned managed identity attached. Expected '$env:CITRIX_BUILD_IDENTITY'."
+                throw "VM '$($vm.Name)' does not have a user-assigned managed identity attached. Expected '$env:CITRIX_BUILD_IDENTITY'."
             }
 
-            $identity = Get-AzUserAssignedIdentity -ResourceGroupName $env:RESOURCE_GROUP -Name $env:CITRIX_BUILD_IDENTITY -ErrorAction Stop
+            $identity = Get-AzUserAssignedIdentity `
+                -ResourceGroupName $env:RESOURCE_GROUP `
+                -Name $env:CITRIX_BUILD_IDENTITY `
+                -ErrorAction Stop
 
-            if ($null -eq $vm.Identity.UserAssignedIdentities.Keys -or $vm.Identity.UserAssignedIdentities.Keys -notcontains $identity.Id) {
-              throw "VM '$($vm.Name)' is not using '$env:CITRIX_BUILD_IDENTITY'. Attach the Citrix build managed identity before running this workflow."
+            if ($vm.Identity.UserAssignedIdentities.Keys -notcontains $identity.Id) {
+                throw "VM '$($vm.Name)' does not have '$env:CITRIX_BUILD_IDENTITY' attached. Attach the managed identity before running this workflow."
             }
 
-            Write-Output "Verified managed identity: $($identity.Name)"
-            Write-Output "Identity principal ID: $($identity.PrincipalId)"
+            Write-Output "Managed identity : $($identity.Name)"
+            Write-Output "Principal ID     : $($identity.PrincipalId)"
+            Write-Output "Verification passed."
 
+      # ---------------------------------------------------------------
+      # 4. Run the DDC installation script on the target VM
+      # ---------------------------------------------------------------
       - name: Install Citrix Delivery Controller
         uses: azure/powershell@v2
         env:
@@ -66,22 +89,58 @@ jobs:
         with:
           azPSVersion: latest
           inlineScript: |
-            Write-Output "Installing Citrix Delivery Controller on $env:VM_NAME..."
-            Write-Output "Media: https://ctxmedia.blob.core.windows.net/cvad/x64/"
-            Write-Output "Local media: C:\Source\CitrixCVAD"
-            Write-Output "SQL Express: not installed (Citrix /nosql)"
+            Write-Output "=================================================="
+            Write-Output "Starting DDC installation on: $env:VM_NAME"
+            Write-Output "Storage account : $env:STORAGE_ACCOUNT"
+            Write-Output "Container       : $env:STORAGE_CONTAINER"
+            Write-Output "Blob prefix     : $env:BLOB_PREFIX"
+            Write-Output "Local media     : $env:LOCAL_MEDIA_ROOT"
+            Write-Output "=================================================="
 
-            $result = Invoke-AzVMRunCommand `
-              -ResourceGroupName $env:RESOURCE_GROUP `
-              -VMName $env:VM_NAME `
-              -CommandId 'RunPowerShellScript' `
-              -ScriptPath './Scripts/Install-Citrix-DDC.ps1'
-
-            $result.Value | ForEach-Object {
-              Write-Output $_.Message
+            $params = @{
+                StorageAccountName = $env:STORAGE_ACCOUNT
+                StorageContainer   = $env:STORAGE_CONTAINER
+                BlobPrefix         = $env:BLOB_PREFIX
+                LocalMediaRoot     = $env:LOCAL_MEDIA_ROOT
             }
 
+            $result = Invoke-AzVMRunCommand `
+                -ResourceGroupName $env:RESOURCE_GROUP `
+                -VMName            $env:VM_NAME `
+                -CommandId         'RunPowerShellScript' `
+                -ScriptPath        './Scripts/Install-Citrix-DDC.ps1' `
+                -Parameter         $params `
+                -ErrorAction       Stop
+
+            # Surface all output from the VM
+            Write-Output ""
+            Write-Output "---------- VM output ----------"
+            $result.Value | ForEach-Object { Write-Output $_.Message }
+            Write-Output "---------- End VM output ------"
+
+            # Fail the workflow step if the Run Command itself did not succeed
+            if ($result.Status -ne 'Succeeded') {
+                throw "VM Run Command returned status '$($result.Status)'. Check the output above for details."
+            }
+
+            # Fail if the script output contains a known failure signal
+            $outputText = ($result.Value | ForEach-Object { $_.Message }) -join "`n"
+            if ($outputText -match 'installer failed with exit code' -or $outputText -match 'throw') {
+                throw "DDC installation script reported a failure. Check the output above."
+            }
+
+            Write-Output ""
+            Write-Output "DDC installation completed successfully on $env:VM_NAME."
+
+      # ---------------------------------------------------------------
+      # 5. Summary
+      # ---------------------------------------------------------------
       - name: DDC installation complete
         shell: pwsh
         run: |
-          Write-Output "Citrix Delivery Controller installation workflow completed for ${{ inputs.vmName }}."
+          Write-Output "=================================================="
+          Write-Output "Workflow complete"
+          Write-Output "VM      : ${{ inputs.vmName }}"
+          Write-Output "Time    : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')"
+          Write-Output "Status  : Success"
+          Write-Output "=================================================="
