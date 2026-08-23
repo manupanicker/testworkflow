@@ -17,7 +17,7 @@ env:
   STORAGE_ACCOUNT:       ctxmedia
   STORAGE_CONTAINER:     cvad
   BLOB_PREFIX:      ''
-  LOCAL_MEDIA_ROOT: C:\Source\CVADInstaller
+  LOCAL_MEDIA_ROOT: C:\Source\CVADInstaller\cvad
   CITRIX_BUILD_IDENTITY: CitrixBuildVMIdentity
   MAX_ATTEMPTS:          "6"
   REBOOT_WAIT_SECONDS:   "120"
