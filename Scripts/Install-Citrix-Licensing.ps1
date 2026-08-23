@@ -1,15 +1,12 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$BlobSasBase64
+    [string]$BlobUrisBase64
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$StorageAccount = 'ctxmedia'
-$Container = 'cvad'
-$BlobPrefix = 'Licensing/'
 $SourceRoot = 'C:\Source'
 $MediaRoot = Join-Path $SourceRoot 'CitrixLicensing'
 $LogFile = Join-Path $MediaRoot 'CitrixLicenseInstall.log'
@@ -17,23 +14,23 @@ $LogFile = Join-Path $MediaRoot 'CitrixLicenseInstall.log'
 Write-Output '============================================================'
 Write-Output 'Citrix License Server Installation'
 Write-Output '============================================================'
-Write-Output "Source      : Azure Blob Storage"
-Write-Output "Container   : $Container/$BlobPrefix"
+Write-Output 'Source      : Azure Blob Storage'
 Write-Output "Local media : $MediaRoot"
 
-if ([string]::IsNullOrWhiteSpace($BlobSasBase64)) {
-    throw 'BlobSasBase64 is required.'
+if ([string]::IsNullOrWhiteSpace($BlobUrisBase64)) {
+    throw 'BlobUrisBase64 is required.'
 }
 
 try {
-    $SasToken = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($BlobSasBase64)).TrimStart('?')
+    $BlobUrisJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($BlobUrisBase64))
+    $BlobUris = @($BlobUrisJson | ConvertFrom-Json)
 }
 catch {
-    throw 'BlobSasBase64 is not valid Base64.'
+    throw "BlobUrisBase64 could not be decoded: $($_.Exception.Message)"
 }
 
-if ([string]::IsNullOrWhiteSpace($SasToken)) {
-    throw 'Decoded Blob SAS token is empty.'
+if (-not $BlobUris -or $BlobUris.Count -eq 0) {
+    throw 'No Blob download URLs were supplied.'
 }
 
 $ServiceNames = @(
@@ -53,45 +50,34 @@ else {
     New-Item -Path $SourceRoot -ItemType Directory -Force | Out-Null
     New-Item -Path $MediaRoot -ItemType Directory -Force | Out-Null
 
-    $ContainerBaseUri = "https://$StorageAccount.blob.core.windows.net/$Container"
+    Write-Output "Received $($BlobUris.Count) Blob download URL(s)."
 
-    Write-Output 'Listing Citrix Licensing media in Blob Storage...'
-
-    # The SAS token is kept separate from the REST query parameters so the
-    # Run Command extension does not interpret SAS '&' characters as commands.
-    $ListUri = "$ContainerBaseUri`?restype=container&comp=list&prefix=$([Uri]::EscapeDataString($BlobPrefix))&$SasToken"
-    $BlobList = Invoke-RestMethod -Uri $ListUri -Method Get -UseBasicParsing
-    $Blobs = @($BlobList.EnumerationResults.Blobs.Blob)
-
-    if (-not $Blobs -or $Blobs.Count -eq 0) {
-        throw "No blobs were found under '$BlobPrefix' in the Citrix media container."
-    }
-
-    foreach ($Blob in $Blobs) {
-        $BlobName = [string]$Blob.Name
-
-        if ([string]::IsNullOrWhiteSpace($BlobName) -or $BlobName.EndsWith('/')) {
+    foreach ($BlobUri in $BlobUris) {
+        if ([string]::IsNullOrWhiteSpace([string]$BlobUri)) {
             continue
         }
 
-        if (-not $BlobName.StartsWith($BlobPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $Uri = [System.Uri]$BlobUri
+        $BlobPath = $Uri.AbsolutePath.TrimStart('/')
+        $SlashIndex = $BlobPath.IndexOf('/')
+
+        if ($SlashIndex -lt 0) {
+            throw "Invalid Blob URL path: $BlobUri"
+        }
+
+        $BlobName = $BlobPath.Substring($SlashIndex + 1)
+        $RelativeName = $BlobName -replace '^Licensing/', ''
+
+        if ([string]::IsNullOrWhiteSpace($RelativeName)) {
             continue
         }
 
-        $RelativeName = $BlobName.Substring($BlobPrefix.Length)
         $LocalFile = Join-Path $MediaRoot $RelativeName
         $LocalDirectory = Split-Path -Path $LocalFile -Parent
-
         New-Item -Path $LocalDirectory -ItemType Directory -Force | Out-Null
 
-        $EncodedBlobName = (($BlobName -split '/') | ForEach-Object {
-            [System.Uri]::EscapeDataString($_)
-        }) -join '/'
-
-        $DownloadUri = "$ContainerBaseUri/$EncodedBlobName`?$SasToken"
-
         Write-Output "Downloading: $BlobName"
-        Invoke-WebRequest -Uri $DownloadUri -OutFile $LocalFile -UseBasicParsing
+        Invoke-WebRequest -Uri $BlobUri -OutFile $LocalFile -UseBasicParsing
     }
 
     $Installer = Join-Path $MediaRoot 'CitrixLicensing.exe'
