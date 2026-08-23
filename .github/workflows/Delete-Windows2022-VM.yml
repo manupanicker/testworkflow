@@ -56,8 +56,14 @@ jobs:
         with:
           azPSVersion: latest
           inlineScript: |
-            if ([string]::IsNullOrWhiteSpace($env:ALPHAQ_DOMAIN_JOIN_USERNAME) -or [string]::IsNullOrWhiteSpace($env:ALPHAQ_DOMAIN_JOIN_PASSWORD)) {
-              throw 'Domain credentials are not configured.'
+            $vm = Get-AzVM -ResourceGroupName $env:RESOURCE_GROUP -Name '${{ inputs.vmName }}' -Status -ErrorAction Stop
+            $powerState = $vm.Statuses |
+              Where-Object { $_.Code -like 'PowerState/*' } |
+              Select-Object -ExpandProperty Code -First 1
+
+            if ($powerState -ne 'PowerState/running') {
+              Write-Output "VM is not running ($powerState). Skipping domain removal."
+              exit 0
             }
 
             $parameters = @{
