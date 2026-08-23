@@ -58,6 +58,18 @@ variable "os_disk_type" {
   default = "Premium_LRS"
 }
 
+variable "citrix_build_identity_name" {
+  type        = string
+  description = "Existing user-assigned managed identity attached to Citrix build VMs"
+  default     = "CitrixBuildIdentity"
+}
+
+variable "citrix_build_identity_resource_group" {
+  type        = string
+  description = "Resource group containing the Citrix build managed identity"
+  default     = "CITRIX_BUILD"
+}
+
 variable "admin_password" {
   type      = string
   sensitive = true
