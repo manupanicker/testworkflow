@@ -13,6 +13,11 @@ data "azurerm_subnet" "build" {
   resource_group_name  = var.resource_group_name
 }
 
+data "azurerm_user_assigned_identity" "citrix_build" {
+  name                = var.citrix_build_identity_name
+  resource_group_name = var.citrix_build_identity_resource_group
+}
+
 resource "azurerm_network_interface" "vm" {
   name                = "${var.vm_name}-nic"
   location            = var.location
@@ -40,6 +45,11 @@ resource "azurerm_windows_virtual_machine" "vm" {
   admin_password = var.admin_password
 
   network_interface_ids = [azurerm_network_interface.vm.id]
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [data.azurerm_user_assigned_identity.citrix_build.id]
+  }
 
   source_image_reference {
     publisher = var.image_publisher
