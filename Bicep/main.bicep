@@ -26,8 +26,8 @@ param adminUsername string = 'azureuser'
 @description('Windows administrator password')
 param adminPassword string
 
-@description('Shared user-assigned managed identity used by Citrix build VMs')
-param citrixBuildIdentityName string = 'CitrixBuildIdentity'
+@description('Existing user-assigned managed identity used by Citrix build VMs')
+param citrixBuildIdentityName string = 'CitrixBuildVMIdentity'
 
 @description('Windows Server image publisher')
 param imagePublisher string = 'microsoftwindowsserver'
