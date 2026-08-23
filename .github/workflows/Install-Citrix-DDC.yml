@@ -16,8 +16,8 @@ env:
   RESOURCE_GROUP:        CITRIX_BUILD
   STORAGE_ACCOUNT:       ctxmedia
   STORAGE_CONTAINER:     cvad
-  BLOB_PREFIX:      ''
-  LOCAL_MEDIA_ROOT: C:\Source\CVADInstaller\cvad
+  BLOB_PREFIX:           ''
+  LOCAL_MEDIA_ROOT:      C:\Source\CVADInstaller
   CITRIX_BUILD_IDENTITY: CitrixBuildVMIdentity
   MAX_ATTEMPTS:          "6"
   REBOOT_WAIT_SECONDS:   "120"
@@ -31,15 +31,9 @@ jobs:
 
     steps:
 
-      # ---------------------------------------------------------------
-      # 1. Checkout
-      # ---------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---------------------------------------------------------------
-      # 2. Azure login (OIDC)
-      # ---------------------------------------------------------------
       - name: Azure login
         uses: azure/login@v2
         with:
@@ -48,9 +42,6 @@ jobs:
           subscription-id:    ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           enable-AzPSSession: true
 
-      # ---------------------------------------------------------------
-      # 3. Verify VM and managed identity
-      # ---------------------------------------------------------------
       - name: Verify target VM and managed identity
         uses: azure/powershell@v2
         env:
@@ -84,13 +75,6 @@ jobs:
             Write-Output "Principal ID     : $($identity.PrincipalId)"
             Write-Output "Verification passed."
 
-      # ---------------------------------------------------------------
-      # 4. Install DDC with reboot retry loop
-      #    Handles up to 4 reboots (MAX_ATTEMPTS = 6 gives enough buffer)
-      #    Success signal : INSTALL_COMPLETE in VM output
-      #    Reboot signal  : REBOOT_REQUIRED in VM output
-      #    Failure signal : FATAL: in VM output
-      # ---------------------------------------------------------------
       - name: Install Citrix DDC with reboot handling
         uses: azure/powershell@v2
         env:
@@ -149,12 +133,11 @@ jobs:
 
                     Restart-AzVM `
                         -ResourceGroupName $env:RESOURCE_GROUP `
-                        -Name $env:VM_NAME | out-null
+                        -Name $env:VM_NAME | Out-Null
 
                     Write-Output "VM reboot initiated. Waiting $rebootWait seconds..."
                     Start-Sleep -Seconds $rebootWait
 
-                    # Poll until VM is running
                     $vmReady   = $false
                     $waitTry   = 0
 
@@ -199,9 +182,6 @@ jobs:
                 throw "DDC installation did not complete after $maxAttempts attempts."
             }
 
-      # ---------------------------------------------------------------
-      # 5. Summary
-      # ---------------------------------------------------------------
       - name: Installation complete
         shell: pwsh
         run: |
