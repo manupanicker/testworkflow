@@ -59,7 +59,7 @@ jobs:
 
             # The media set is intentionally explicit for this Licensing workflow.
             # This avoids requiring the GitHub identity to perform Blob data-plane
-            # listing. The VM still receives only short-lived read SAS URLs.
+            # listing. The VM receives only short-lived read SAS URLs.
             $blobNames = @(
               "${env:BLOB_PREFIX}CitrixLicensing.exe"
               "${env:BLOB_PREFIX}CTX_Licensing.msi"
@@ -68,10 +68,12 @@ jobs:
               "${env:BLOB_PREFIX}LicensingAdmin_PowerShellSnapin_x64.msi"
             )
 
-            $downloadUris = foreach ($blobName in $blobNames) {
-              Write-Output "Preparing SAS URL for: $blobName"
+            $downloadUris = [System.Collections.Generic.List[string]]::new()
 
-              New-AzStorageBlobSASToken `
+            foreach ($blobName in $blobNames) {
+              Write-Host "Preparing SAS URL for: $blobName"
+
+              $sasResult = @(New-AzStorageBlobSASToken `
                 -Context $ctx `
                 -Container $env:STORAGE_CONTAINER `
                 -Blob $blobName `
@@ -79,16 +81,28 @@ jobs:
                 -Protocol HttpsOnly `
                 -StartTime $startTime `
                 -ExpiryTime $expiryTime `
-                -FullUri
+                -FullUri)
+
+              foreach ($sasUri in $sasResult) {
+                if ($null -ne $sasUri -and -not [string]::IsNullOrWhiteSpace([string]$sasUri)) {
+                  $downloadUris.Add([string]$sasUri)
+                }
+              }
             }
 
-            $json = @($downloadUris) | ConvertTo-Json -Compress
+            if ($downloadUris.Count -ne $blobNames.Count) {
+              throw "Expected $($blobNames.Count) Blob SAS URLs but generated $($downloadUris.Count)."
+            }
+
+            # Force a JSON array of strings. This prevents a single SAS result from
+            # arriving at the VM as a nested System.Object[] value.
+            $json = $downloadUris.ToArray() | ConvertTo-Json -Compress
             $base64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
 
             "::add-mask::$base64"
             "BLOB_URIS_BASE64=$base64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-            Write-Output "Prepared $($blobNames.Count) Citrix Licensing media file URL(s)."
+            Write-Output "Prepared $($downloadUris.Count) Citrix Licensing media file URL(s)."
 
       - name: Install Citrix Licensing with Azure VM Run Command
         uses: azure/powershell@v2
