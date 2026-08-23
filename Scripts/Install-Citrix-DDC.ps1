@@ -12,7 +12,7 @@ param(
 
     [Parameter(Mandatory = $false)]
     #[string]$LocalMediaRoot = 'C:\Source\CitrixCVAD'
-    [string]$LocalMediaRoot = 'C:\Source\CVADInstaller\CVAD'
+    [string]$LocalMediaRoot = 'C:\Source\CVADInstaller'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -161,7 +161,8 @@ if (-not (Test-Path -LiteralPath $installer)) {
     Write-Host 'Installer not found locally - downloading media from Blob Storage...'
     $azcopyExe = Get-AzCopy -InstallPath 'C:\azcopy'
     #$sourceUrl  = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer + '/' + $BlobPrefix + '*'
-    $sourceUrl = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer
+    #$sourceUrl = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer +
+    $sourceUrl = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer + '/'
 
     Invoke-AzCopyDownload `
         -AzCopyExe   $azcopyExe `
@@ -246,7 +247,7 @@ if ($process.ExitCode -eq 0) {
     }
 
 }
-elseif ($process.ExitCode -eq 14) {
+elseif ($process.ExitCode -eq 14 -or $process.ExitCode -eq 3){
 
     # Check if services are already running (resume after previous reboot)
     Write-Host 'Exit code 14 - checking if services are already running from a previous pass...'
