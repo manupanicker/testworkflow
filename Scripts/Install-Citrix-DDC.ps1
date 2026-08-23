@@ -7,13 +7,10 @@ param(
     [string]$StorageContainer = 'cvad',
 
     [Parameter(Mandatory = $false)]
-    #[string]$BlobPrefix = 'x64/',
     [string]$BlobPrefix = '',
 
     [Parameter(Mandatory = $false)]
-    #[string]$LocalMediaRoot = 'C:\Source\CitrixCVAD'
-    #[string]$LocalMediaRoot = 'C:\Source\CVADInstaller'
-    [string]$LocalMediaRoot = 'C:\Source\CVADInstaller\cvad'
+    [string]$LocalMediaRoot = 'C:\Source\CVADInstaller'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -111,7 +108,6 @@ function Invoke-AzCopyDownload {
 
 # ===========================================================================
 # FUNCTION: Test-CitrixServicesRunning
-# Returns $true only when all three core DDC services are running.
 # ===========================================================================
 function Test-CitrixServicesRunning {
 
@@ -156,15 +152,15 @@ if (-not (Test-Path -LiteralPath $LocalMediaRoot)) {
 }
 
 # Download media only if installer not already present
-#$installer = Join-Path $LocalMediaRoot 'XenDesktop Setup\XenDesktopServerSetup.exe'
 $installer = Join-Path $LocalMediaRoot 'x64\XenDesktop Setup\XenDesktopServerSetup.exe'
 
 if (-not (Test-Path -LiteralPath $installer)) {
     Write-Host 'Installer not found locally - downloading media from Blob Storage...'
     $azcopyExe = Get-AzCopy -InstallPath 'C:\azcopy'
-    #$sourceUrl  = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer + '/' + $BlobPrefix + '*'
-    #$sourceUrl = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer +
-    $sourceUrl = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer + '/'
+
+    # Wildcard /* copies container CONTENTS directly into destination
+    # without creating a container-named subfolder
+    $sourceUrl = 'https://' + $StorageAccountName + '.blob.core.windows.net/' + $StorageContainer + '/*'
 
     Invoke-AzCopyDownload `
         -AzCopyExe   $azcopyExe `
@@ -231,7 +227,6 @@ Write-Host ''
 
 if ($process.ExitCode -eq 0) {
 
-    # Installer completed - verify services
     Write-Host 'Installer reported success. Verifying Citrix services...'
 
     if (Test-CitrixServicesRunning) {
@@ -249,10 +244,9 @@ if ($process.ExitCode -eq 0) {
     }
 
 }
-elseif ($process.ExitCode -eq 14 -or $process.ExitCode -eq 3){
+elseif ($process.ExitCode -eq 14 -or $process.ExitCode -eq 3) {
 
-    # Check if services are already running (resume after previous reboot)
-    Write-Host 'Exit code 14 - checking if services are already running from a previous pass...'
+    Write-Host ('Exit code ' + $process.ExitCode + ' - checking if services are already running from a previous pass...')
 
     if (Test-CitrixServicesRunning) {
         Write-Host ''
