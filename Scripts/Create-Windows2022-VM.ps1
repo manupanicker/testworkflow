@@ -32,6 +32,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OSDiskType,
 
+    [string]$CitrixBuildIdentityName = "CitrixBuildIdentity",
+    [string]$CitrixBuildIdentityResourceGroup = "CITRIX_BUILD",
     [string]$DnsServer = "172.16.0.4",
     [bool]$EnableAcceleratedNetworking = $true,
     [bool]$EnableBootDiagnostics = $true,
@@ -58,6 +60,7 @@ Write-Output "Image         : $ImagePublisher/$ImageOffer/$ImageSku"
 Write-Output "Security      : $SecurityType"
 Write-Output "Secure Boot   : $SecureBoot"
 Write-Output "vTPM          : $VTPM"
+Write-Output "Citrix Build Identity: $CitrixBuildIdentityName"
 Write-Output "=============================================="
 
 $context = Get-AzContext
@@ -69,6 +72,13 @@ Write-Output "Azure subscription: $($context.Subscription.Name)"
 
 Get-AzResourceGroup -Name $ResourceGroupName -ErrorAction Stop | Out-Null
 Write-Output "Resource group verified."
+
+$identity = Get-AzUserAssignedIdentity `
+    -ResourceGroupName $CitrixBuildIdentityResourceGroup `
+    -Name $CitrixBuildIdentityName `
+    -ErrorAction Stop
+
+Write-Output "Managed identity verified: $($identity.Id)"
 
 $existingVM = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName -ErrorAction SilentlyContinue
 if ($existingVM) {
@@ -112,13 +122,10 @@ $vmConfig = Set-AzVMSourceImage `
     -Skus $ImageSku `
     -Version $ImageVersion
 
-# Create NIC with dynamic private IP (DHCP), no public IP, and the required DNS server.
 Write-Output "Creating network interface..."
 
 $nicName = "$VMName-nic"
 
-# New-AzNetworkInterface can prompt for confirmation in some Az.Network versions.
-# The GitHub runner is non-interactive, so explicitly disable confirmation.
 $nic = New-AzNetworkInterface `
     -Name $nicName `
     -ResourceGroupName $ResourceGroupName `
@@ -142,7 +149,6 @@ if ($EnableBootDiagnostics) {
     $vmConfig = Set-AzVMBootDiagnostic -VM $vmConfig -Enable
 }
 
-# Trusted Launch with Secure Boot and vTPM.
 if ($SecurityType -eq "TrustedLaunch") {
     Write-Output "Configuring Trusted Launch..."
 
@@ -162,6 +168,19 @@ New-AzVM `
     -Verbose `
     -Confirm:$false
 
+Write-Output "Attaching Citrix build managed identity..."
+
+$createdVM = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName -ErrorAction Stop
+
+Update-AzVM `
+    -ResourceGroupName $ResourceGroupName `
+    -VM $createdVM `
+    -IdentityType UserAssigned `
+    -IdentityId $identity.Id `
+    -Confirm:$false | Out-Null
+
+Write-Output "Managed identity attached: $CitrixBuildIdentityName"
+
 Write-Output ""
 Write-Output "=============================================="
 Write-Output "VM CREATION COMPLETED"
@@ -172,4 +191,5 @@ $createdVM = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName
 Write-Output "VM Name : $($createdVM.Name)"
 Write-Output "VM Size : $($createdVM.HardwareProfile.VmSize)"
 Write-Output "Status  : $($createdVM.ProvisioningState)"
+Write-Output "Managed Identity: $CitrixBuildIdentityName"
 Write-Output "=============================================="
