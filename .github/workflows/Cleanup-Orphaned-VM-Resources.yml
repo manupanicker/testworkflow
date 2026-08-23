@@ -1,0 +1,122 @@
+name: Cleanup Orphaned VM Resources
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmCleanup:
+        description: 'Type CLEANUP to confirm orphaned resource cleanup'
+        required: true
+        type: string
+      dryRun:
+        description: 'Only report orphaned resources without deleting them'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: CITRIX_BUILD
+
+jobs:
+  cleanup-orphaned-resources:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate cleanup confirmation
+        shell: pwsh
+        run: |
+          if ('${{ inputs.confirmCleanup }}' -ne 'CLEANUP') {
+            throw 'Cleanup cancelled. You must type CLEANUP exactly.'
+          }
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Find and remove orphaned VM resources
+        uses: azure/powershell@v2
+        env:
+          DRY_RUN: ${{ inputs.dryRun }}
+        with:
+          azPSVersion: latest
+          inlineScript: |
+            $ErrorActionPreference = 'Stop'
+            $resourceGroup = $env:RESOURCE_GROUP
+            $dryRun = [System.Convert]::ToBoolean($env:DRY_RUN)
+
+            $vms = @(Get-AzVM -ResourceGroupName $resourceGroup)
+            $attachedNicIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $attachedDiskIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+            foreach ($vm in $vms) {
+              foreach ($nic in @($vm.NetworkProfile.NetworkInterfaces)) {
+                if ($nic.Id) { [void]$attachedNicIds.Add($nic.Id) }
+              }
+
+              if ($vm.StorageProfile.OsDisk.ManagedDisk.Id) {
+                [void]$attachedDiskIds.Add($vm.StorageProfile.OsDisk.ManagedDisk.Id)
+              }
+
+              foreach ($dataDisk in @($vm.StorageProfile.DataDisks)) {
+                if ($dataDisk.ManagedDisk.Id) { [void]$attachedDiskIds.Add($dataDisk.ManagedDisk.Id) }
+              }
+            }
+
+            $orphanedNics = @(Get-AzNetworkInterface -ResourceGroupName $resourceGroup | Where-Object {
+              -not $_.VirtualMachine -and -not $attachedNicIds.Contains($_.Id)
+            })
+
+            $attachedPublicIpIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            foreach ($nic in @(Get-AzNetworkInterface -ResourceGroupName $resourceGroup)) {
+              if (-not $attachedNicIds.Contains($nic.Id)) { continue }
+
+              foreach ($ipConfiguration in @($nic.IpConfigurations)) {
+                if ($ipConfiguration.PublicIpAddress.Id) {
+                  [void]$attachedPublicIpIds.Add($ipConfiguration.PublicIpAddress.Id)
+                }
+              }
+            }
+
+            $orphanedPublicIps = @(Get-AzPublicIpAddress -ResourceGroupName $resourceGroup | Where-Object {
+              -not $_.IpConfiguration -and -not $attachedPublicIpIds.Contains($_.Id)
+            })
+
+            $orphanedDisks = @(Get-AzDisk -ResourceGroupName $resourceGroup | Where-Object {
+              -not $_.ManagedBy -and -not $attachedDiskIds.Contains($_.Id)
+            })
+
+            Write-Output "Existing VMs: $($vms.Count)"
+            Write-Output "Orphaned NICs: $($orphanedNics.Count)"
+            Write-Output "Orphaned public IPs: $($orphanedPublicIps.Count)"
+            Write-Output "Orphaned managed disks: $($orphanedDisks.Count)"
+
+            foreach ($resource in @($orphanedNics + $orphanedPublicIps + $orphanedDisks)) {
+              Write-Output "Orphaned resource: $($resource.ResourceType)/$($resource.Name)"
+            }
+
+            if ($dryRun) {
+              Write-Output 'Dry run selected. No resources were deleted.'
+              exit 0
+            }
+
+            foreach ($nic in $orphanedNics) {
+              Remove-AzNetworkInterface -ResourceGroupName $resourceGroup -Name $nic.Name -Force
+              Write-Output "Deleted orphaned NIC: $($nic.Name)"
+            }
+
+            foreach ($publicIp in $orphanedPublicIps) {
+              Remove-AzPublicIpAddress -ResourceGroupName $resourceGroup -Name $publicIp.Name -Force
+              Write-Output "Deleted orphaned public IP: $($publicIp.Name)"
+            }
+
+            foreach ($disk in $orphanedDisks) {
+              Remove-AzDisk -ResourceGroupName $resourceGroup -DiskName $disk.Name -Force
+              Write-Output "Deleted orphaned managed disk: $($disk.Name)"
+            }
+
+            Write-Output 'Orphaned VM resource cleanup completed.'
