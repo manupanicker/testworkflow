@@ -32,7 +32,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OSDiskType,
 
-    [string]$CitrixBuildIdentityName = "CitrixBuildIdentity",
+    [string]$CitrixBuildIdentityName = "CitrixBuildVMIdentity",
     [string]$CitrixBuildIdentityResourceGroup = "CITRIX_BUILD",
     [string]$DnsServer = "172.16.0.4",
     [bool]$EnableAcceleratedNetworking = $true,
