@@ -9,10 +9,10 @@ on:
         type: string
         default: win2022-bicep-test
       citrix_build_identity_name:
-        description: 'Existing user-assigned managed identity for Citrix build VMs'
+        description: 'Managed identity attached to Citrix build VMs'
         required: true
         type: string
-        default: CitrixBuildIdentity
+        default: CitrixBuildVMIdentity
 
 permissions:
   id-token: write
