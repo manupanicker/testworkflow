@@ -1,28 +1,41 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$BlobContainerSasUri
+    [string]$BlobSasBase64
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+$StorageAccount = 'ctxmedia'
+$Container = 'cvad'
+$BlobPrefix = 'Licensing/'
 $SourceRoot = 'C:\Source'
 $MediaRoot = Join-Path $SourceRoot 'CitrixLicensing'
 $LogFile = Join-Path $MediaRoot 'CitrixLicenseInstall.log'
-$BlobPrefix = 'Licensing/'
 
 Write-Output '============================================================'
 Write-Output 'Citrix License Server Installation'
 Write-Output '============================================================'
 Write-Output "Source      : Azure Blob Storage"
+Write-Output "Container   : $Container/$BlobPrefix"
 Write-Output "Local media : $MediaRoot"
 
-if ([string]::IsNullOrWhiteSpace($BlobContainerSasUri)) {
-    throw 'BlobContainerSasUri is required.'
+if ([string]::IsNullOrWhiteSpace($BlobSasBase64)) {
+    throw 'BlobSasBase64 is required.'
 }
 
-# If Licensing is already installed, do not reinstall it.
+try {
+    $SasToken = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($BlobSasBase64)).TrimStart('?')
+}
+catch {
+    throw 'BlobSasBase64 is not valid Base64.'
+}
+
+if ([string]::IsNullOrWhiteSpace($SasToken)) {
+    throw 'Decoded Blob SAS token is empty.'
+}
+
 $ServiceNames = @(
     'Citrix Licensing',
     'CitrixWebServicesforLicensing',
@@ -40,17 +53,13 @@ else {
     New-Item -Path $SourceRoot -ItemType Directory -Force | Out-Null
     New-Item -Path $MediaRoot -ItemType Directory -Force | Out-Null
 
-    $Uri = [System.Uri]$BlobContainerSasUri
-    $ContainerBaseUri = $BlobContainerSasUri.Split('?')[0].TrimEnd('/')
-    $SasQuery = $Uri.Query.TrimStart('?')
-
-    if ([string]::IsNullOrWhiteSpace($SasQuery)) {
-        throw 'The Blob container URI does not contain a SAS token.'
-    }
+    $ContainerBaseUri = "https://$StorageAccount.blob.core.windows.net/$Container"
 
     Write-Output 'Listing Citrix Licensing media in Blob Storage...'
 
-    $ListUri = "$ContainerBaseUri`?$SasQuery&restype=container&comp=list&prefix=$BlobPrefix"
+    # The SAS token is kept separate from the REST query parameters so the
+    # Run Command extension does not interpret SAS '&' characters as commands.
+    $ListUri = "$ContainerBaseUri`?restype=container&comp=list&prefix=$([Uri]::EscapeDataString($BlobPrefix))&$SasToken"
     $BlobList = Invoke-RestMethod -Uri $ListUri -Method Get -UseBasicParsing
     $Blobs = @($BlobList.EnumerationResults.Blobs.Blob)
 
@@ -79,7 +88,7 @@ else {
             [System.Uri]::EscapeDataString($_)
         }) -join '/'
 
-        $DownloadUri = "$ContainerBaseUri/$EncodedBlobName`?$SasQuery"
+        $DownloadUri = "$ContainerBaseUri/$EncodedBlobName`?$SasToken"
 
         Write-Output "Downloading: $BlobName"
         Invoke-WebRequest -Uri $DownloadUri -OutFile $LocalFile -UseBasicParsing
