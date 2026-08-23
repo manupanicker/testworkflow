@@ -52,8 +52,6 @@ function Get-ManagedIdentityToken {
 
 # ===========================================================================
 # FUNCTION: Get-BlobList
-# FIX: URI built via string concatenation — no literal & inside quoted strings.
-#      Run Command restricted language mode disallows & in double-quoted strings.
 # ===========================================================================
 function Get-BlobList {
     param(
@@ -68,7 +66,7 @@ function Get-BlobList {
         throw ('Invalid Blob container name: ' + $Container)
     }
 
-    Write-Host ('Listing blobs — account: ' + $Account + '  container: ' + $Container + '  prefix: ' + $Prefix)
+    Write-Host ('Listing blobs - account: ' + $Account + '  container: ' + $Container + '  prefix: ' + $Prefix)
 
     $allBlobs = [System.Collections.Generic.List[string]]::new()
     $marker   = $null
@@ -76,7 +74,6 @@ function Get-BlobList {
     do {
         $encodedPrefix = [Uri]::EscapeDataString($Prefix)
 
-        # Build URI via concatenation — no & inside a quoted string
         $uriBase   = 'https://' + $Account + '.blob.core.windows.net/' + $Container
         $uriParams = '?restype=container' + '&comp=list' + '&prefix=' + $encodedPrefix
         $uri       = $uriBase + $uriParams
@@ -87,7 +84,7 @@ function Get-BlobList {
 
         Write-Host ('Listing Blob URI: ' + $uri)
 
-        $response = Invoke-RestMethod `
+        $xmlResponse = Invoke-RestMethod `
             -Method Get `
             -Uri $uri `
             -Headers @{
@@ -96,14 +93,19 @@ function Get-BlobList {
             } `
             -UseBasicParsing
 
-        foreach ($blob in @($response.EnumerationResults.Blobs.Blob)) {
+        # DEBUG - show raw counts to diagnose empty results
+        Write-Host ('Raw blob count   : ' + @($xmlResponse.EnumerationResults.Blobs.Blob).Count)
+        Write-Host ('Raw prefix count : ' + @($xmlResponse.EnumerationResults.Blobs.BlobPrefix).Count)
+        Write-Host ('Marker           : ' + [string]$xmlResponse.EnumerationResults.NextMarker)
+
+        foreach ($blob in @($xmlResponse.EnumerationResults.Blobs.Blob)) {
             if ($null -ne $blob.Name -and
                 -not [string]::IsNullOrWhiteSpace([string]$blob.Name)) {
                 $allBlobs.Add([string]$blob.Name)
             }
         }
 
-        $marker = [string]$response.EnumerationResults.NextMarker
+        $marker = [string]$xmlResponse.EnumerationResults.NextMarker
 
     } while (-not [string]::IsNullOrWhiteSpace($marker))
 
@@ -122,7 +124,6 @@ function ConvertTo-BlobUriPath {
 
 # ===========================================================================
 # FUNCTION: Download-Blob
-# FIX: URI built via string concatenation — no & or ${ } in quoted strings.
 # ===========================================================================
 function Download-Blob {
     param(
@@ -140,8 +141,6 @@ function Download-Blob {
     }
 
     $encodedBlobName = ConvertTo-BlobUriPath -BlobName $BlobName
-
-    # Build URI via concatenation
     $uri = 'https://' + $Account + '.blob.core.windows.net/' + $Container + '/' + $encodedBlobName
 
     Write-Host ('Downloading: ' + $BlobName)
@@ -161,18 +160,15 @@ function Download-Blob {
 # MAIN
 # ===========================================================================
 
-# Ensure local media root exists
 if (-not (Test-Path -LiteralPath $LocalMediaRoot)) {
     Write-Host ('Creating local media directory: ' + $LocalMediaRoot)
     New-Item -ItemType Directory -Path $LocalMediaRoot -Force | Out-Null
 }
 
-# Authenticate via managed identity
 $token = Get-ManagedIdentityToken
 Write-Host 'Managed identity authentication succeeded.'
 Write-Host ''
 
-# List blobs
 Write-Host 'Listing Citrix CVAD media in Blob Storage...'
 $blobNames = @(Get-BlobList `
     -Token     $token `
@@ -181,13 +177,12 @@ $blobNames = @(Get-BlobList `
     -Prefix    $BlobPrefix)
 
 if ($blobNames.Count -eq 0) {
-    throw ('No blobs found under prefix ' + $BlobPrefix + ' in container ' + $StorageContainer + '. Verify the media has been uploaded.')
+    throw ('No blobs found under prefix ' + $BlobPrefix + ' in container ' + $StorageContainer + '. Check debug output above for raw counts.')
 }
 
 Write-Host ('Found ' + $blobNames.Count + ' blob(s). Starting download...')
 Write-Host ''
 
-# Download all blobs preserving relative folder structure
 foreach ($blobName in $blobNames) {
 
     $relativePath = $blobName.Substring($BlobPrefix.Length)
@@ -208,11 +203,10 @@ Write-Host ''
 Write-Host 'All blobs downloaded.'
 Write-Host ''
 
-# Locate installer
 $installer = Join-Path $LocalMediaRoot 'XenDesktop Setup\XenDesktopServerSetup.exe'
 
 if (-not (Test-Path -LiteralPath $installer)) {
-    Write-Host 'Installer not found at expected path — searching recursively...'
+    Write-Host 'Installer not found at expected path - searching recursively...'
     $candidate = Get-ChildItem `
         -Path    $LocalMediaRoot `
         -Filter  'XenDesktopServerSetup.exe' `
@@ -230,7 +224,6 @@ if (-not (Test-Path -LiteralPath $installer)) {
 Write-Host ('Installer path: ' + $installer)
 Write-Host ''
 
-# Build argument list
 $arguments = @(
     '/components',              'controller,desktopstudio',
     '/configure_firewall',
@@ -262,7 +255,6 @@ if ($process.ExitCode -ne 0) {
     throw ('Citrix Delivery Controller installer failed with exit code ' + $process.ExitCode)
 }
 
-# Verify services
 Write-Host ''
 Write-Host 'Verifying Citrix services...'
 
@@ -281,7 +273,7 @@ foreach ($svcName in $expectedServices) {
         $allRunning = $false
     }
     elseif ($svc.Status -ne 'Running') {
-        Write-Host ('  [STOPPED] ' + $svcName + ' — attempting start...')
+        Write-Host ('  [STOPPED] ' + $svcName + ' - attempting start...')
         Start-Service -Name $svcName -ErrorAction SilentlyContinue
         $svc.Refresh()
         Write-Host ('  [STATUS ] ' + $svcName + ' -> ' + $svc.Status)
