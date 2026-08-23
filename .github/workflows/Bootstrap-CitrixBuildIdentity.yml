@@ -1,0 +1,89 @@
+name: Bootstrap Citrix Build VM Identity
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: CITRIX_BUILD
+  STORAGE_RESOURCE_GROUP: Citrix_Build
+  STORAGE_ACCOUNT: ctxmedia
+  IDENTITY_NAME: CitrixBuildVMIdentity
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create or verify Citrix build VM identity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if az identity show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$IDENTITY_NAME" \
+            >/dev/null 2>&1; then
+            echo "Managed identity already exists: $IDENTITY_NAME"
+          else
+            echo "Creating managed identity: $IDENTITY_NAME"
+            az identity create \
+              --resource-group "$RESOURCE_GROUP" \
+              --name "$IDENTITY_NAME" \
+              --location eastus \
+              --output none
+          fi
+
+      - name: Grant Blob Reader access to Citrix media
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IDENTITY_PRINCIPAL_ID=$(az identity show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$IDENTITY_NAME" \
+            --query principalId \
+            --output tsv)
+
+          STORAGE_ID=$(az storage account show \
+            --resource-group "$STORAGE_RESOURCE_GROUP" \
+            --name "$STORAGE_ACCOUNT" \
+            --query id \
+            --output tsv)
+
+          ROLE_ID=$(az role definition list \
+            --name "Storage Blob Data Reader" \
+            --query "[0].id" \
+            --output tsv)
+
+          EXISTING=$(az role assignment list \
+            --assignee-object-id "$IDENTITY_PRINCIPAL_ID" \
+            --scope "$STORAGE_ID" \
+            --role "$ROLE_ID" \
+            --query "length(@)" \
+            --output tsv)
+
+          if [ "$EXISTING" = "0" ]; then
+            echo "Granting Storage Blob Data Reader..."
+            az role assignment create \
+              --assignee-object-id "$IDENTITY_PRINCIPAL_ID" \
+              --assignee-principal-type ServicePrincipal \
+              --role "$ROLE_ID" \
+              --scope "$STORAGE_ID"
+          else
+            echo "Storage Blob Data Reader already assigned."
+          fi
+
+          echo "Identity: $IDENTITY_NAME"
+          echo "Principal ID: $IDENTITY_PRINCIPAL_ID"
+          echo "Storage: $STORAGE_ID"
