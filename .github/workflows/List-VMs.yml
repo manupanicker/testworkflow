@@ -1,0 +1,48 @@
+name: List VMs in Azure Subscription
+
+on:
+  workflow_dispatch:
+
+env:
+  AZURE_TENANT_ID: "94b72edb-7da8-4f4b-aaa2-8d17b5e9f265"
+  AZURE_SUBSCRIPTION_ID: "fa1be5b8-5dcf-4a7c-82a1-cff11d480b0d"
+  AZURE_CLIENT_ID: "030bf1f3-c03b-4008-a1a1-7696b5af2e64"
+
+jobs:
+  list-vms:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: List VMs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "Azure Context:"
+          Get-AzContext
+
+          Write-Host ""
+          Write-Host "VMs in subscription:"
+          Write-Host "===================="
+
+          $vms = Get-AzVM
+
+          if (-not $vms) {
+              Write-Host "No VMs found."
+              exit 0
+          }
+
+          $vms |
+            Select-Object Name, ResourceGroupName, Location, @{Name="VMSize"; Expression={$_.HardwareProfile.VmSize}} |
+            Sort-Object ResourceGroupName, Name |
+            Format-Table -AutoSize
+
+          Write-Host ""
+          Write-Host "Total VMs: $($vms.Count)"
