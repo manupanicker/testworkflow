@@ -1,0 +1,187 @@
+name: Install Citrix StoreFront
+
+on:
+  workflow_dispatch:
+    inputs:
+      vmName:
+        description: 'Existing Azure VM name'
+        required: true
+        type: string
+      installerName:
+        description: 'StoreFront installer filename in Blob Storage'
+        required: true
+        type: string
+        default: 'StoreFront-x64.exe'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: CITRIX_BUILD
+  STORAGE_ACCOUNT: ctxmedia
+  STORAGE_CONTAINER: cvad
+  BLOB_PREFIX: StoreFront/
+  LOCAL_MEDIA_ROOT: C:\Source\StoreFrontInstaller
+  CITRIX_BUILD_IDENTITY: CitrixBuildVMIdentity
+  MAX_ATTEMPTS: '6'
+  REBOOT_WAIT_SECONDS: '120'
+  SETTLE_WAIT_SECONDS: '30'
+  VM_READY_RETRIES: '10'
+  VM_READY_INTERVAL: '30'
+
+jobs:
+  install-storefront:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: Verify target VM and managed identity
+        uses: azure/powershell@v2
+        env:
+          VM_NAME: ${{ inputs.vmName }}
+        with:
+          azPSVersion: latest
+          inlineScript: |
+            $vm = Get-AzVM `
+                -ResourceGroupName $env:RESOURCE_GROUP `
+                -Name $env:VM_NAME `
+                -ErrorAction Stop
+
+            Write-Output "Target VM  : $($vm.Name)"
+            Write-Output "Location   : $($vm.Location)"
+            Write-Output "VM Size    : $($vm.HardwareProfile.VmSize)"
+
+            if ($null -eq $vm.Identity -or $vm.Identity.Type -notmatch 'UserAssigned') {
+                throw "VM '$($vm.Name)' does not have a user-assigned managed identity attached."
+            }
+
+            $identity = Get-AzUserAssignedIdentity `
+                -ResourceGroupName $env:RESOURCE_GROUP `
+                -Name $env:CITRIX_BUILD_IDENTITY `
+                -ErrorAction Stop
+
+            if ($vm.Identity.UserAssignedIdentities.Keys -notcontains $identity.Id) {
+                throw "VM '$($vm.Name)' does not have '$env:CITRIX_BUILD_IDENTITY' attached."
+            }
+
+            Write-Output "Managed identity : $($identity.Name)"
+            Write-Output "Principal ID     : $($identity.PrincipalId)"
+            Write-Output 'Verification passed.'
+
+      - name: Install Citrix StoreFront with reboot handling
+        uses: azure/powershell@v2
+        env:
+          VM_NAME: ${{ inputs.vmName }}
+          INSTALLER_NAME: ${{ inputs.installerName }}
+        with:
+          azPSVersion: latest
+          inlineScript: |
+            $maxAttempts     = [int]$env:MAX_ATTEMPTS
+            $rebootWait      = [int]$env:REBOOT_WAIT_SECONDS
+            $settleWait      = [int]$env:SETTLE_WAIT_SECONDS
+            $vmReadyRetries  = [int]$env:VM_READY_RETRIES
+            $vmReadyInterval = [int]$env:VM_READY_INTERVAL
+            $attempt         = 0
+            $installed       = $false
+
+            while (-not $installed -and $attempt -lt $maxAttempts) {
+                $attempt++
+                Write-Output '=================================================='
+                Write-Output "StoreFront install attempt $attempt of $maxAttempts"
+                Write-Output '=================================================='
+
+                $params = @{
+                    StorageAccountName = $env:STORAGE_ACCOUNT
+                    StorageContainer   = $env:STORAGE_CONTAINER
+                    BlobPrefix         = $env:BLOB_PREFIX
+                    LocalMediaRoot     = $env:LOCAL_MEDIA_ROOT
+                    InstallerName      = $env:INSTALLER_NAME
+                }
+
+                $result = Invoke-AzVMRunCommand `
+                    -ResourceGroupName $env:RESOURCE_GROUP `
+                    -VMName            $env:VM_NAME `
+                    -CommandId         'RunPowerShellScript' `
+                    -ScriptPath        './Scripts/Install-Citrix-StoreFront.ps1' `
+                    -Parameter         $params `
+                    -ErrorAction       Stop
+
+                $output = ($result.Value | ForEach-Object { $_.Message }) -join "`n"
+                Write-Output $output
+                Write-Output '---------- End VM output ----------'
+
+                if ($output -match 'INSTALL_COMPLETE') {
+                    Write-Output "StoreFront installation completed successfully on attempt $attempt."
+                    $installed = $true
+                }
+                elseif ($output -match 'REBOOT_REQUIRED') {
+                    if ($attempt -ge $maxAttempts) {
+                        throw "Max attempts ($maxAttempts) reached - still requiring reboot. Check VM manually."
+                    }
+
+                    Write-Output "Reboot required - rebooting $env:VM_NAME..."
+                    Restart-AzVM -ResourceGroupName $env:RESOURCE_GROUP -Name $env:VM_NAME | Out-Null
+
+                    Write-Output "VM reboot initiated. Waiting $rebootWait seconds..."
+                    Start-Sleep -Seconds $rebootWait
+
+                    $vmReady = $false
+                    $waitTry = 0
+
+                    while (-not $vmReady -and $waitTry -lt $vmReadyRetries) {
+                        $waitTry++
+                        $vm = Get-AzVM `
+                            -ResourceGroupName $env:RESOURCE_GROUP `
+                            -Name $env:VM_NAME `
+                            -Status
+
+                        $state = ($vm.Statuses | Where-Object { $_.Code -like 'PowerState/*' }).DisplayStatus
+                        Write-Output "VM state: $state (poll $waitTry of $vmReadyRetries)"
+
+                        if ($state -eq 'VM running') {
+                            $vmReady = $true
+                        }
+                        else {
+                            Start-Sleep -Seconds $vmReadyInterval
+                        }
+                    }
+
+                    if (-not $vmReady) {
+                        throw "VM did not come back online after reboot on attempt $attempt."
+                    }
+
+                    Write-Output "VM is online. Waiting $settleWait seconds for services to settle..."
+                    Start-Sleep -Seconds $settleWait
+                }
+                elseif ($output -match 'FATAL:') {
+                    throw "StoreFront installation failed on attempt $attempt. Check output above."
+                }
+                else {
+                    throw "Unexpected output on attempt $attempt. Could not determine install status."
+                }
+            }
+
+            if (-not $installed) {
+                throw "StoreFront installation did not complete after $maxAttempts attempts."
+            }
+
+      - name: Installation complete
+        shell: pwsh
+        run: |
+          Write-Output '=================================================='
+          Write-Output 'StoreFront workflow complete'
+          Write-Output "VM     : ${{ inputs.vmName }}"
+          Write-Output "Time   : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')"
+          Write-Output 'Status : Success'
+          Write-Output '=================================================='
