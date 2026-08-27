@@ -1,0 +1,73 @@
+name: Install Citrix VDA
+on:
+  workflow_dispatch:
+    inputs:
+      vmName:
+        description: 'Existing Azure VM name'
+        required: true
+        type: string
+      installerName:
+        description: 'VDA installer filename in CVAD media'
+        required: true
+        default: 'VDAWorkstationSetup_x64.exe'
+        type: string
+permissions:
+  id-token: write
+  contents: read
+env:
+  RESOURCE_GROUP: CITRIX_BUILD
+  STORAGE_ACCOUNT: ctxmedia
+  STORAGE_CONTAINER: cvad
+  BLOB_PREFIX: ''
+  LOCAL_MEDIA_ROOT: C:\Source\CVADInstaller
+  CITRIX_BUILD_IDENTITY: CitrixBuildVMIdentity
+jobs:
+  install-vda:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+      - name: Verify target VM and managed identity
+        uses: azure/powershell@v2
+        env:
+          VM_NAME: ${{ inputs.vmName }}
+        with:
+          azPSVersion: latest
+          inlineScript: |
+            $vm=Get-AzVM -ResourceGroupName $env:RESOURCE_GROUP -Name $env:VM_NAME -ErrorAction Stop
+            if($null -eq $vm.Identity -or $vm.Identity.Type -notmatch 'UserAssigned'){throw "VM '$($vm.Name)' does not have a user-assigned managed identity."}
+            $identity=Get-AzUserAssignedIdentity -ResourceGroupName $env:RESOURCE_GROUP -Name $env:CITRIX_BUILD_IDENTITY -ErrorAction Stop
+            if($vm.Identity.UserAssignedIdentities.Keys -notcontains $identity.Id){throw "VM '$($vm.Name)' does not have '$env:CITRIX_BUILD_IDENTITY' attached."}
+            Write-Output "Target VM: $($vm.Name)"
+            Write-Output "Managed identity: $($identity.Name)"
+      - name: Install VDA
+        uses: azure/powershell@v2
+        env:
+          VM_NAME: ${{ inputs.vmName }}
+          INSTALLER_NAME: ${{ inputs.installerName }}
+        with:
+          azPSVersion: latest
+          inlineScript: |
+            $p=@{StorageAccountName=$env:STORAGE_ACCOUNT;StorageContainer=$env:STORAGE_CONTAINER;BlobPrefix=$env:BLOB_PREFIX;LocalMediaRoot=$env:LOCAL_MEDIA_ROOT;InstallerName=$env:INSTALLER_NAME}
+            $r=Invoke-AzVMRunCommand -ResourceGroupName $env:RESOURCE_GROUP -VMName $env:VM_NAME -CommandId RunPowerShellScript -ScriptPath './Scripts/Install-Citrix-VDA.ps1' -Parameter $p -ErrorAction Stop
+            $o=($r.Value|%{$_.Message}) -join "`n"; Write-Output $o
+            if($o -match 'INSTALL_COMPLETE'){return}
+            if($o -match 'REBOOT_REQUIRED'){
+              Restart-AzVM -ResourceGroupName $env:RESOURCE_GROUP -Name $env:VM_NAME|Out-Null
+              Start-Sleep 120
+              $vm=Get-AzVM -ResourceGroupName $env:RESOURCE_GROUP -Name $env:VM_NAME -Status
+              $state=($vm.Statuses|?{$_.Code -like 'PowerState/*'}).DisplayStatus
+              if($state -ne 'VM running'){throw "VM is not running after reboot. State: $state"}
+              Start-Sleep 30
+              $r=Invoke-AzVMRunCommand -ResourceGroupName $env:RESOURCE_GROUP -VMName $env:VM_NAME -CommandId RunPowerShellScript -ScriptPath './Scripts/Install-Citrix-VDA.ps1' -Parameter $p -ErrorAction Stop
+              $o=($r.Value|%{$_.Message}) -join "`n"; Write-Output $o
+              if($o -match 'INSTALL_COMPLETE'){return}
+            }
+            throw 'VDA installation did not complete. Check output above.'
