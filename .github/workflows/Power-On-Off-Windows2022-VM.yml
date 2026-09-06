@@ -16,17 +16,30 @@ on:
           - stop
         default: start
 
+  repository_dispatch:
+    types:
+      - citrix-power
+
 permissions:
   id-token: write
   contents: read
 
 env:
   RESOURCE_GROUP: CITRIX_BUILD
+  VM_NAME: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.vmName || inputs.vmName }}
+  POWER_ACTION: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.powerAction || inputs.powerAction }}
 
 jobs:
   power-vm:
     runs-on: ubuntu-latest
+
     steps:
+      - name: Show requested operation
+        shell: bash
+        run: |
+          echo "VM: $VM_NAME"
+          echo "Action: $POWER_ACTION"
+
       - name: Azure login
         uses: azure/login@v2
         with:
@@ -39,31 +52,31 @@ jobs:
         run: |
           az vm show \
             --resource-group "$RESOURCE_GROUP" \
-            --name '${{ inputs.vmName }}' \
+            --name "$VM_NAME" \
             --query name \
             --output tsv
 
       - name: Power on VM
-        if: inputs.powerAction == 'start'
+        if: env.POWER_ACTION == 'start'
         shell: bash
         run: |
           az vm start \
             --resource-group "$RESOURCE_GROUP" \
-            --name '${{ inputs.vmName }}'
+            --name "$VM_NAME"
 
       - name: Power off VM
-        if: inputs.powerAction == 'stop'
+        if: env.POWER_ACTION == 'stop'
         shell: bash
         run: |
           az vm deallocate \
             --resource-group "$RESOURCE_GROUP" \
-            --name '${{ inputs.vmName }}'
+            --name "$VM_NAME"
 
       - name: Show VM power state
         shell: bash
         run: |
           az vm get-instance-view \
             --resource-group "$RESOURCE_GROUP" \
-            --name '${{ inputs.vmName }}' \
+            --name "$VM_NAME" \
             --query "instanceView.statuses[?starts_with(code, 'PowerState/')].displayStatus" \
             --output tsv
