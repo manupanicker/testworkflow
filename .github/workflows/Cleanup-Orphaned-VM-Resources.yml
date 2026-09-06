@@ -18,8 +18,8 @@ permissions:
   contents: read
 
 env:
-  RESOURCE_GROUP: CITRIX_BUILD
-
+  RESOURCE_GROUP: op6-0-ctx-rg
+  
 jobs:
   cleanup-orphaned-resources:
     runs-on: ubuntu-latest
