@@ -26,8 +26,8 @@ permissions:
 
 env:
   RESOURCE_GROUP: op6-0-ctx-rg
-  VM_NAME: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.vmName || inputs.vmName }}
-  POWER_ACTION: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.powerAction || inputs.powerAction }}
+  VM_NAME: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.vm_name || inputs.vmName }}
+  POWER_ACTION: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.action || inputs.powerAction }}
 
 jobs:
   power-vm:
